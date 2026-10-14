@@ -1,0 +1,25 @@
+{
+  "name": "llm-gateway-coursework",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "dotenv": "^18.0.5",
+    "fastify": "^5.12.5",
+    "openai": "^7.28.0",
+    "pino": "^10.4.0",
+    "zod": "^4.6.5"
+  }
+}
