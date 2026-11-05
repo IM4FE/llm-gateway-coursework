@@ -28,7 +28,14 @@ Copy-Item .env.example .env
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 ```
 
-Полученное значение подставьте в `ENCRYPTION_KEY`.
+Полученное значение подставьте в `ENCRYPTION_KEY`. Docker Desktop должен быть
+запущен, иначе `docker compose up -d` не сможет подключиться к демону.
+
+Примените миграции:
+
+```sh
+npm run db:migrate
+```
 
 Запуск в режиме разработки:
 
@@ -105,7 +112,7 @@ deepseek/deepseek-r1:free
 - [x] Валидация окружения через Zod
 - [x] Docker Compose с PostgreSQL
 - [x] Health/ready endpoints
-- [ ] Схема БД и миграции
+- [x] Схема БД и первая миграция Drizzle
 - [ ] Адаптер OpenAI-совместимых провайдеров (OpenRouter)
 - [ ] Пул ключей и ротация
 - [ ] Fallback и circuit breaker

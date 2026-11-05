@@ -21,6 +21,6 @@
 
     "noEmit": true
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "drizzle.config.ts", "vitest.config.ts"],
   "exclude": ["node_modules", "dist", "web", "example_react"]
 }
