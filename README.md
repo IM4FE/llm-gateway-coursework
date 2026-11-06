@@ -112,6 +112,7 @@ deepseek/deepseek-r1:free
 - [x] Валидация окружения через Zod
 - [x] Docker Compose с PostgreSQL
 - [x] Health/ready endpoints
+- [x] Доменные контракты и модель ошибок
 - [x] Схема БД и первая миграция Drizzle
 - [ ] Адаптер OpenAI-совместимых провайдеров (OpenRouter)
 - [ ] Пул ключей и ротация

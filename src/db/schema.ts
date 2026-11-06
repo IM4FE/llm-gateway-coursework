@@ -12,12 +12,9 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core';
 
-export const providerTypeEnum = pgEnum('provider_type', [
-  'openai_compatible',
-  'anthropic',
-  'ollama',
-  'mock',
-]);
+import { PROVIDER_TYPES } from '../core/types.js';
+
+export const providerTypeEnum = pgEnum('provider_type', PROVIDER_TYPES);
 
 export const requestStatusEnum = pgEnum('request_status', [
   'success',
