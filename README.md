@@ -73,7 +73,6 @@ src/
 ├── app.ts           # сборка Fastify-приложения
 └── index.ts         # точка входа
 web/                 # будущая demo/admin-консоль (React)
-example_react/       # лабораторная работа 4, не входит в сборку backend
 docs/                # пояснения и проектная документация
 ```
 
@@ -114,7 +113,8 @@ deepseek/deepseek-r1:free
 - [x] Health/ready endpoints
 - [x] Доменные контракты и модель ошибок
 - [x] Схема БД и первая миграция Drizzle
-- [ ] Адаптер OpenAI-совместимых провайдеров (OpenRouter)
+- [x] OpenAI-совместимый адаптер (OpenRouter, без streaming)
+- [ ] Streaming в адаптере (SSE)
 - [ ] Пул ключей и ротация
 - [ ] Fallback и circuit breaker
 - [ ] SSE streaming
