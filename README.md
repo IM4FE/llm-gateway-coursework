@@ -114,8 +114,9 @@ deepseek/deepseek-r1:free
 - [x] Доменные контракты и модель ошибок
 - [x] Схема БД и первая миграция Drizzle
 - [x] OpenAI-совместимый адаптер (OpenRouter, без streaming)
+- [x] Пул ключей в памяти: round-robin, cooldown, invalid-ключи
+- [ ] Загрузка ключей из БД (`api_keys`) и шифрование
 - [ ] Streaming в адаптере (SSE)
-- [ ] Пул ключей и ротация
 - [ ] Fallback и circuit breaker
 - [ ] SSE streaming
 - [ ] Журнал запросов и стоимость
