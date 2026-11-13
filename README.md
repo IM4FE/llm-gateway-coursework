@@ -71,6 +71,7 @@ src/
 ├── config/          # валидация окружения
 ├── core/            # доменные типы и ядро маршрутизации
 ├── db/              # схема Drizzle, клиент и репозитории
+├── routes/          # резолвер маршрутов и сборка deployment'ов
 ├── app.ts           # сборка Fastify-приложения
 └── index.ts         # точка входа
 web/                 # будущая demo/admin-консоль (React)
@@ -117,9 +118,10 @@ deepseek/deepseek-r1:free
 - [x] OpenAI-совместимый адаптер (OpenRouter, без streaming)
 - [x] Пул ключей в памяти: round-robin, cooldown, invalid-ключи
 - [x] Загрузка ключей из БД и шифрование AES-256-GCM
+- [x] Резолвер маршрутов из БД и кэш пулов ключей
+- [x] Fallback по ключам и провайдерам
 - [ ] Сохранение состояния ключей (cooldown, last_used_at) в БД
 - [ ] Streaming в адаптере (SSE)
-- [x] Fallback по ключам и провайдерам
 - [ ] Circuit breaker
 - [ ] SSE streaming
 - [ ] Журнал запросов и стоимость
