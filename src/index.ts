@@ -3,6 +3,7 @@ import { buildApp } from './app.js';
 import { createClientAuthenticator } from './auth/clientAuth.js';
 import { loadEnv } from './config/env.js';
 import { PoolRegistry } from './core/PoolRegistry.js';
+import { FixedWindowRateLimiter } from './core/RateLimiter.js';
 import { Router } from './core/Router.js';
 import { createApiKeyRepository } from './db/apiKeyRepository.js';
 import { createDatabase } from './db/client.js';
@@ -18,6 +19,7 @@ const pools = new PoolRegistry((providerId) => apiKeys.createPool(providerId));
 const routes = createRouteRepository(database.db);
 const clients = createClientRepository(database.db);
 const authenticateClient = createClientAuthenticator(clients);
+const rateLimiter = new FixedWindowRateLimiter();
 
 const router = new Router(
   createDeploymentResolver({
@@ -44,7 +46,7 @@ const router = new Router(
   }),
 );
 
-const app = buildApp(env, { router, authenticateClient });
+const app = buildApp(env, { router, authenticateClient, rateLimiter });
 
 const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
   app.log.info({ signal }, 'shutting down');

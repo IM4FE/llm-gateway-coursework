@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 
 import type { ClientAuthenticator } from './auth/clientAuth.js';
 import type { Env } from './config/env.js';
+import type { RateLimiter } from './core/RateLimiter.js';
 import {
   registerChatCompletionRoute,
   type ChatCompletionHandler,
@@ -10,6 +11,7 @@ import {
 export interface AppDependencies {
   router?: ChatCompletionHandler;
   authenticateClient?: ClientAuthenticator;
+  rateLimiter?: RateLimiter;
 }
 
 export function buildApp(

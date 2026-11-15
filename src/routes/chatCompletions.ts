@@ -10,6 +10,7 @@ import {
   toGatewayError,
   type GatewayErrorCode,
 } from '../core/errors.js';
+import type { RateLimiter } from '../core/RateLimiter.js';
 import type { RouterChatOptions } from '../core/Router.js';
 import type {
   ChatRequest,
@@ -32,6 +33,7 @@ export interface ChatCompletionHandler {
 export interface ChatCompletionDependencies {
   router?: ChatCompletionHandler;
   authenticateClient?: ClientAuthenticator;
+  rateLimiter?: RateLimiter;
 }
 
 const chatMessageSchema = z.object({
@@ -127,6 +129,44 @@ export function registerChatCompletionRoute(
       { clientId: client.id, clientName: client.name },
       'client authenticated',
     );
+
+    if (dependencies.rateLimiter === undefined) {
+      const error = new GatewayError({
+        code: 'internal_error',
+        message: 'Rate limiter is not configured',
+      });
+
+      return reply.status(error.httpStatus).send(toErrorResponse(error));
+    }
+
+    const rateLimit = dependencies.rateLimiter.check(
+      client.id,
+      client.rateLimitRpm,
+    );
+
+    reply.header('X-RateLimit-Limit', String(rateLimit.limit));
+    reply.header('X-RateLimit-Remaining', String(rateLimit.remaining));
+    reply.header(
+      'X-RateLimit-Reset',
+      String(Math.ceil(rateLimit.resetAt / 1_000)),
+    );
+
+    if (!rateLimit.allowed) {
+      const error = new GatewayError({
+        code: 'rate_limited',
+        message: `Rate limit exceeded: ${rateLimit.limit} request(s) per minute`,
+      });
+
+      request.log.warn(
+        { clientId: client.id, limit: rateLimit.limit },
+        'client rate limit exceeded',
+      );
+
+      return reply
+        .status(error.httpStatus)
+        .header('Retry-After', String(rateLimit.retryAfterSeconds))
+        .send(toErrorResponse(error));
+    }
 
     const parsed = chatCompletionRequestSchema.safeParse(request.body);
 

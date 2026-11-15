@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { buildApp } from '../app.js';
 import type {
@@ -8,6 +8,7 @@ import type {
 } from '../auth/clientAuth.js';
 import type { Env } from '../config/env.js';
 import { GatewayError } from '../core/errors.js';
+import type { RateLimitDecision, RateLimiter } from '../core/RateLimiter.js';
 import type { RouterChatOptions } from '../core/Router.js';
 import type { ChatRequest, ChatResponse } from '../core/types.js';
 import type { ChatCompletionHandler } from './chatCompletions.js';
@@ -41,6 +42,24 @@ const requireTestKey: ClientAuthenticator = async (authorization) => {
   }
 
   return testClient;
+};
+
+function rateLimitDecision(
+  overrides: Partial<RateLimitDecision> = {},
+): RateLimitDecision {
+  return {
+    allowed: true,
+    limit: 60,
+    remaining: 59,
+    retryAfterSeconds: 0,
+    resetAt: 1_800_000_000_000,
+    ...overrides,
+  };
+}
+
+const allowAllLimiter: RateLimiter = {
+  check: (_key, limit) =>
+    rateLimitDecision({ limit, remaining: limit - 1 }),
 };
 
 class FakeRouter implements ChatCompletionHandler {
@@ -91,9 +110,11 @@ afterEach(async () => {
 function createApp(
   router?: ChatCompletionHandler,
   authenticateClient: ClientAuthenticator = allowAllClients,
+  rateLimiter: RateLimiter = allowAllLimiter,
 ): FastifyInstance {
   app = buildApp(testEnv, {
     authenticateClient,
+    rateLimiter,
     ...(router === undefined ? {} : { router }),
   });
   return app;
@@ -404,5 +425,100 @@ describe('client authentication on POST /v1/chat/completions', () => {
 
     expect(response.statusCode).toBe(200);
     expect(router.calls).toHaveLength(1);
+  });
+});
+
+describe('rate limiting on POST /v1/chat/completions', () => {
+  it('returns 429 with Retry-After when the client exceeds its limit', async () => {
+    const router = new FakeRouter(chatResponse());
+    const check = vi.fn<RateLimiter['check']>().mockReturnValue(
+      rateLimitDecision({
+        allowed: false,
+        remaining: 0,
+        retryAfterSeconds: 42,
+      }),
+    );
+    const server = createApp(router, allowAllClients, { check });
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'fast-model',
+        messages: [{ role: 'user', content: 'Привет!' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(429);
+    expect(response.headers['retry-after']).toBe('42');
+    expect(response.headers['x-ratelimit-limit']).toBe('60');
+    expect(response.headers['x-ratelimit-remaining']).toBe('0');
+    expect(response.json()).toMatchObject({
+      error: {
+        type: 'rate_limit_error',
+        code: 'rate_limited',
+      },
+    });
+    expect(router.calls).toHaveLength(0);
+  });
+
+  it('checks the limit using the client id and its configured rpm', async () => {
+    const router = new FakeRouter(chatResponse());
+    const check = vi
+      .fn<RateLimiter['check']>()
+      .mockReturnValue(rateLimitDecision());
+    const server = createApp(router, allowAllClients, { check });
+
+    await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'fast-model',
+        messages: [{ role: 'user', content: 'Привет!' }],
+      },
+    });
+
+    expect(check).toHaveBeenCalledWith('client-1', 60);
+  });
+
+  it('exposes rate limit headers on successful responses', async () => {
+    const router = new FakeRouter(chatResponse());
+    const server = createApp(router);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'fast-model',
+        messages: [{ role: 'user', content: 'Привет!' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['x-ratelimit-limit']).toBe('60');
+    expect(response.headers['x-ratelimit-remaining']).toBe('59');
+    expect(response.headers['x-ratelimit-reset']).toBe('1800000000');
+  });
+
+  it('returns a clear error when the rate limiter is not configured', async () => {
+    const router = new FakeRouter(chatResponse());
+    app = buildApp(testEnv, { router, authenticateClient: allowAllClients });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'fast-model',
+        messages: [{ role: 'user', content: 'Привет!' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toMatchObject({
+      error: {
+        message: 'Rate limiter is not configured',
+        code: 'internal_error',
+      },
+    });
   });
 });
