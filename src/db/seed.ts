@@ -1,3 +1,5 @@
+import { and, eq, ne } from 'drizzle-orm';
+
 import { loadEnv } from '../config/env.js';
 import type { Env } from '../config/env.js';
 import {
@@ -11,9 +13,9 @@ import { apiKeys, models, modelRoutes, providers } from './schema.js';
 
 const PROVIDER_NAME = 'OpenRouter';
 const ALIAS = 'fast-model';
-const UPSTREAM_MODEL = 'meta-llama/llama-3.3-70b-instruct:free';
-const DISPLAY_NAME = 'Llama 3.3 70B Instruct (free)';
-const CONTEXT_WINDOW = 131_072;
+const UPSTREAM_MODEL = 'nvidia/nemotron-3.5-lightning:free';
+const DISPLAY_NAME = 'NVIDIA Nemotron 3.5 Lightning (free)';
+const CONTEXT_WINDOW = 1_000_000;
 const TIMEOUT_MS = 60_000;
 
 export interface SeedResult {
@@ -100,7 +102,7 @@ export async function seedDatabase(
       .returning({ id: models.id });
 
     if (model === undefined) {
-      throw new Error('Failed to upsert the free Llama model');
+      throw new Error('Failed to upsert the free model');
     }
 
     const [route] = await tx
@@ -126,6 +128,22 @@ export async function seedDatabase(
     if (route === undefined) {
       throw new Error('Failed to upsert the fast-model route');
     }
+
+    // Seed владеет alias "fast-model": старые маршруты этого alias
+    // деактивируются, чтобы после смены модели не оставался
+    // нерабочий маршрут с тем же приоритетом.
+    await tx
+      .update(modelRoutes)
+      .set({
+        isActive: false,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(modelRoutes.alias, ALIAS),
+          ne(modelRoutes.modelId, model.id),
+        ),
+      );
 
     const [apiKey] = await tx
       .insert(apiKeys)
