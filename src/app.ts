@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 
+import type { ClientAuthenticator } from './auth/clientAuth.js';
 import type { Env } from './config/env.js';
 import {
   registerChatCompletionRoute,
@@ -8,6 +9,7 @@ import {
 
 export interface AppDependencies {
   router?: ChatCompletionHandler;
+  authenticateClient?: ClientAuthenticator;
 }
 
 export function buildApp(

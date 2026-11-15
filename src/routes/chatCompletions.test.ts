@@ -2,6 +2,10 @@ import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { buildApp } from '../app.js';
+import type {
+  AuthenticatedClient,
+  ClientAuthenticator,
+} from '../auth/clientAuth.js';
 import type { Env } from '../config/env.js';
 import { GatewayError } from '../core/errors.js';
 import type { RouterChatOptions } from '../core/Router.js';
@@ -17,6 +21,26 @@ const testEnv: Env = {
   ADMIN_TOKEN: '0123456789abcdef',
   ENCRYPTION_KEY: Buffer.alloc(32, 1).toString('base64'),
   OPENROUTER_BASE_URL: 'https://openrouter.ai/api/v1',
+};
+
+const testClient: AuthenticatedClient = {
+  id: 'client-1',
+  name: 'Test Client',
+  rateLimitRpm: 60,
+  monthlyBudgetMicros: 0,
+};
+
+const allowAllClients: ClientAuthenticator = async () => testClient;
+
+const requireTestKey: ClientAuthenticator = async (authorization) => {
+  if (authorization !== 'Bearer test-client-key') {
+    throw new GatewayError({
+      code: 'unauthorized',
+      message: 'Invalid client API key',
+    });
+  }
+
+  return testClient;
 };
 
 class FakeRouter implements ChatCompletionHandler {
@@ -64,8 +88,14 @@ afterEach(async () => {
   }
 });
 
-function createApp(router?: ChatCompletionHandler): FastifyInstance {
-  app = buildApp(testEnv, router === undefined ? {} : { router });
+function createApp(
+  router?: ChatCompletionHandler,
+  authenticateClient: ClientAuthenticator = allowAllClients,
+): FastifyInstance {
+  app = buildApp(testEnv, {
+    authenticateClient,
+    ...(router === undefined ? {} : { router }),
+  });
   return app;
 }
 
@@ -277,5 +307,102 @@ describe('POST /v1/chat/completions', () => {
         code: 'internal_error',
       },
     });
+  });
+
+  it('returns a clear error when authentication is not configured', async () => {
+    const router = new FakeRouter(chatResponse());
+    app = buildApp(testEnv, { router });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'fast-model',
+        messages: [{ role: 'user', content: 'Привет!' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toMatchObject({
+      error: {
+        message: 'Client authentication is not configured',
+        code: 'internal_error',
+      },
+    });
+  });
+});
+
+describe('client authentication on POST /v1/chat/completions', () => {
+  it('rejects a request without a bearer token', async () => {
+    const router = new FakeRouter(chatResponse());
+    const server = createApp(router, requireTestKey);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'fast-model',
+        messages: [{ role: 'user', content: 'Привет!' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({
+      error: {
+        type: 'authentication_error',
+        code: 'unauthorized',
+      },
+    });
+    expect(router.calls).toHaveLength(0);
+  });
+
+  it('rejects an unknown bearer token', async () => {
+    const router = new FakeRouter(chatResponse());
+    const server = createApp(router, requireTestKey);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { authorization: 'Bearer wrong-key' },
+      payload: {
+        model: 'fast-model',
+        messages: [{ role: 'user', content: 'Привет!' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(router.calls).toHaveLength(0);
+  });
+
+  it('authenticates before validating the request body', async () => {
+    const router = new FakeRouter(chatResponse());
+    const server = createApp(router, requireTestKey);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: { messages: [] },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(router.calls).toHaveLength(0);
+  });
+
+  it('accepts a valid bearer token', async () => {
+    const router = new FakeRouter(chatResponse());
+    const server = createApp(router, requireTestKey);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { authorization: 'Bearer test-client-key' },
+      payload: {
+        model: 'fast-model',
+        messages: [{ role: 'user', content: 'Привет!' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(router.calls).toHaveLength(1);
   });
 });

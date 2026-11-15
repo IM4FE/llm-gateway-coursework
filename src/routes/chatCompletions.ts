@@ -1,6 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
+import type {
+  AuthenticatedClient,
+  ClientAuthenticator,
+} from '../auth/clientAuth.js';
 import {
   GatewayError,
   toGatewayError,
@@ -23,6 +27,11 @@ export interface ChatCompletionHandler {
     request: ChatRequest,
     options?: RouterChatOptions,
   ): Promise<ChatResponse>;
+}
+
+export interface ChatCompletionDependencies {
+  router?: ChatCompletionHandler;
+  authenticateClient?: ClientAuthenticator;
 }
 
 const chatMessageSchema = z.object({
@@ -83,9 +92,42 @@ export interface ChatCompletionErrorResponse {
 
 export function registerChatCompletionRoute(
   app: FastifyInstance,
-  dependencies: { router?: ChatCompletionHandler },
+  dependencies: ChatCompletionDependencies,
 ): void {
   app.post('/v1/chat/completions', async (request, reply) => {
+    if (dependencies.authenticateClient === undefined) {
+      const error = new GatewayError({
+        code: 'internal_error',
+        message: 'Client authentication is not configured',
+      });
+
+      return reply.status(error.httpStatus).send(toErrorResponse(error));
+    }
+
+    let client: AuthenticatedClient;
+
+    try {
+      client = await dependencies.authenticateClient(
+        request.headers.authorization,
+      );
+    } catch (error) {
+      const gatewayError = toGatewayError(error);
+
+      request.log.warn(
+        { err: gatewayError, code: gatewayError.code },
+        'client authentication failed',
+      );
+
+      return reply
+        .status(gatewayError.httpStatus)
+        .send(toErrorResponse(gatewayError));
+    }
+
+    request.log.debug(
+      { clientId: client.id, clientName: client.name },
+      'client authenticated',
+    );
+
     const parsed = chatCompletionRequestSchema.safeParse(request.body);
 
     if (!parsed.success) {

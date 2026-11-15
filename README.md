@@ -46,6 +46,15 @@ npm run db:seed
 Скрипт идемпотентен: создаёт провайдера OpenRouter, бесплатную модель,
 alias `fast-model` и зашифрованный ключ. Повторный запуск не создаёт дубликаты.
 
+Создайте клиента шлюза и сохраните выведенный API-ключ:
+
+```sh
+npm run db:create-client -- "Postman" 60
+```
+
+Второй аргумент — лимит запросов в минуту (пока только сохраняется в БД).
+Ключ печатается один раз: в базе лежит только его SHA-256-хэш.
+
 Запуск в режиме разработки:
 
 ```sh
@@ -63,20 +72,68 @@ curl http://localhost:3000/ready
 
 ### `POST /v1/chat/completions`
 
-```powershell
-$body = @{
-  model = "fast-model"
-  messages = @(@{ role = "user"; content = "Привет!" })
-} | ConvertTo-Json -Depth 5
+Запрос требует клиентский ключ в заголовке `Authorization: Bearer ...`.
+Ключ создаётся командой `npm run db:create-client` и печатается один раз.
 
-Invoke-RestMethod -Method Post `
-  -Uri http://localhost:3000/v1/chat/completions `
-  -ContentType "application/json" `
-  -Body $body
+#### curl (bash / macOS / Linux)
+
+```sh
+export CLIENT_KEY="lgw_..."
+
+curl -sS http://localhost:3000/v1/chat/completions \
+  -H "Authorization: Bearer $CLIENT_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"fast-model","messages":[{"role":"user","content":"Hello!"}]}'
+```
+
+#### curl.exe (Windows PowerShell)
+
+```powershell
+$env:CLIENT_KEY = "lgw_..."
+
+curl.exe -sS -X POST http://localhost:3000/v1/chat/completions `
+  -H "Authorization: Bearer $env:CLIENT_KEY" `
+  -H "Content-Type: application/json" `
+  -d '{"model":"fast-model","messages":[{"role":"user","content":"Hello!"}]}'
+```
+
+Для кириллицы в Windows PowerShell надёжнее отправить UTF-8-файл:
+
+```powershell
+$json = @'
+{
+  "model": "fast-model",
+  "messages": [
+    { "role": "user", "content": "Привет!" }
+  ]
+}
+'@
+
+[System.IO.File]::WriteAllText(
+  (Join-Path $PWD "body.json"),
+  $json,
+  (New-Object System.Text.UTF8Encoding($false))
+)
+
+curl.exe -sS -X POST http://localhost:3000/v1/chat/completions `
+  -H "Authorization: Bearer $env:CLIENT_KEY" `
+  -H "Content-Type: application/json; charset=utf-8" `
+  --data-binary "@body.json"
 ```
 
 Формат запроса и ответа совместим с OpenAI Chat Completions. Поле `model` —
 это alias из `model_routes`, а не имя upstream-модели.
+
+Аутентификация устроена так:
+
+1. Клиент присылает `Authorization: Bearer <client_key>`.
+2. Шлюз считает SHA-256 от ключа.
+3. Ищет активную запись в `clients` по `key_hash`.
+4. Если клиента нет или он деактивирован — возвращает `401`.
+
+Сам ключ в БД не хранится: только `key_hash` и короткий `key_prefix`.
+Поэтому потерянный ключ нельзя восстановить, можно только создать нового
+клиента.
 
 Чтобы запрос дошёл до OpenRouter, в БД должны быть:
 
@@ -85,9 +142,7 @@ Invoke-RestMethod -Method Post `
 - маршрут `alias → model`;
 - активный ключ в `api_keys`.
 
-Аутентификации клиентов пока нет: endpoint открыт. `ADMIN_TOKEN` предназначен
-для будущей админки. Тестовые провайдер, модель, alias и ключ создаются
-командой `npm run db:seed`.
+`ADMIN_TOKEN` пока не используется: он предназначен для будущей админки.
 
 ## Скрипты
 
@@ -101,6 +156,7 @@ Invoke-RestMethod -Method Post `
 | `npm run db:generate` | Генерация миграции Drizzle |
 | `npm run db:migrate` | Применение миграций |
 | `npm run db:seed` | Заполнение БД провайдером, моделью, alias и ключом |
+| `npm run db:create-client` | Создание клиента и печать его API-ключа |
 | `npm run db:studio` | Drizzle Studio |
 
 ## Структура
@@ -108,10 +164,11 @@ Invoke-RestMethod -Method Post `
 ```text
 src/
 ├── adapters/        # адаптеры провайдеров
+├── auth/            # аутентификация клиентов по Bearer-ключу
 ├── config/          # валидация окружения
 ├── core/            # доменные типы и ядро маршрутизации
 ├── db/              # схема Drizzle, клиент и репозитории
-├── routes/          # резолвер маршрутов и сборка deployment'ов
+├── routes/          # HTTP-маршруты, резолвер и сборка deployment'ов
 ├── app.ts           # сборка Fastify-приложения
 └── index.ts         # точка входа
 web/                 # будущая demo/admin-консоль (React)
@@ -134,7 +191,7 @@ Authorization: Bearer <OPENROUTER_API_KEY>
 Для бесплатных моделей используется суффикс `:free`, например:
 
 ```text
-meta-llama/llama-3.3-70b-instruct:free
+nvidia/nemotron-3.5-lightning:free
 deepseek/deepseek-r1:free
 ```
 
@@ -162,7 +219,8 @@ deepseek/deepseek-r1:free
 - [x] Fallback по ключам и провайдерам
 - [x] HTTP endpoint `POST /v1/chat/completions`
 - [x] Seed-скрипт для провайдера, модели, alias и ключа
-- [ ] Аутентификация клиентов и rate limit
+- [x] Аутентификация клиентов по Bearer-ключу (SHA-256 в БД)
+- [ ] Rate limit по клиентам
 - [ ] Сохранение состояния ключей (cooldown, last_used_at) в БД
 - [ ] Streaming в адаптере (SSE)
 - [ ] Circuit breaker

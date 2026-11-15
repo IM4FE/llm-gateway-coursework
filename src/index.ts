@@ -1,10 +1,12 @@
 import { createProviderAdapter } from './adapters/createProviderAdapter.js';
 import { buildApp } from './app.js';
+import { createClientAuthenticator } from './auth/clientAuth.js';
 import { loadEnv } from './config/env.js';
 import { PoolRegistry } from './core/PoolRegistry.js';
 import { Router } from './core/Router.js';
 import { createApiKeyRepository } from './db/apiKeyRepository.js';
 import { createDatabase } from './db/client.js';
+import { createClientRepository } from './db/clientRepository.js';
 import { createDeploymentResolver } from './routes/deploymentResolver.js';
 import { createRouteRepository } from './routes/routeRepository.js';
 
@@ -14,6 +16,8 @@ const database = createDatabase(env);
 const apiKeys = createApiKeyRepository(database.db, env.ENCRYPTION_KEY);
 const pools = new PoolRegistry((providerId) => apiKeys.createPool(providerId));
 const routes = createRouteRepository(database.db);
+const clients = createClientRepository(database.db);
+const authenticateClient = createClientAuthenticator(clients);
 
 const router = new Router(
   createDeploymentResolver({
@@ -40,7 +44,7 @@ const router = new Router(
   }),
 );
 
-const app = buildApp(env, { router });
+const app = buildApp(env, { router, authenticateClient });
 
 const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
   app.log.info({ signal }, 'shutting down');
