@@ -37,6 +37,15 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 npm run db:migrate
 ```
 
+Заполните `OPENROUTER_API_KEY` в `.env` и создайте тестовые данные:
+
+```sh
+npm run db:seed
+```
+
+Скрипт идемпотентен: создаёт провайдера OpenRouter, бесплатную модель,
+alias `fast-model` и зашифрованный ключ. Повторный запуск не создаёт дубликаты.
+
 Запуск в режиме разработки:
 
 ```sh
@@ -77,7 +86,8 @@ Invoke-RestMethod -Method Post `
 - активный ключ в `api_keys`.
 
 Аутентификации клиентов пока нет: endpoint открыт. `ADMIN_TOKEN` предназначен
-для будущей админки. Скрипт заполнения БД появится следующим шагом.
+для будущей админки. Тестовые провайдер, модель, alias и ключ создаются
+командой `npm run db:seed`.
 
 ## Скрипты
 
@@ -90,6 +100,7 @@ Invoke-RestMethod -Method Post `
 | `npm test` | Юнит- и интеграционные тесты |
 | `npm run db:generate` | Генерация миграции Drizzle |
 | `npm run db:migrate` | Применение миграций |
+| `npm run db:seed` | Заполнение БД провайдером, моделью, alias и ключом |
 | `npm run db:studio` | Drizzle Studio |
 
 ## Структура
@@ -150,6 +161,7 @@ deepseek/deepseek-r1:free
 - [x] Резолвер маршрутов из БД и кэш пулов ключей
 - [x] Fallback по ключам и провайдерам
 - [x] HTTP endpoint `POST /v1/chat/completions`
+- [x] Seed-скрипт для провайдера, модели, alias и ключа
 - [ ] Аутентификация клиентов и rate limit
 - [ ] Сохранение состояния ключей (cooldown, last_used_at) в БД
 - [ ] Streaming в адаптере (SSE)
