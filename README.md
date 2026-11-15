@@ -50,6 +50,35 @@ curl http://localhost:3000/health
 curl http://localhost:3000/ready
 ```
 
+## API
+
+### `POST /v1/chat/completions`
+
+```powershell
+$body = @{
+  model = "fast-model"
+  messages = @(@{ role = "user"; content = "Привет!" })
+} | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod -Method Post `
+  -Uri http://localhost:3000/v1/chat/completions `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+Формат запроса и ответа совместим с OpenAI Chat Completions. Поле `model` —
+это alias из `model_routes`, а не имя upstream-модели.
+
+Чтобы запрос дошёл до OpenRouter, в БД должны быть:
+
+- провайдер `OpenRouter` с `base_url = https://openrouter.ai/api/v1`;
+- модель с нужным `upstream_model`;
+- маршрут `alias → model`;
+- активный ключ в `api_keys`.
+
+Аутентификации клиентов пока нет: endpoint открыт. `ADMIN_TOKEN` предназначен
+для будущей админки. Скрипт заполнения БД появится следующим шагом.
+
 ## Скрипты
 
 | Команда | Назначение |
@@ -120,6 +149,8 @@ deepseek/deepseek-r1:free
 - [x] Загрузка ключей из БД и шифрование AES-256-GCM
 - [x] Резолвер маршрутов из БД и кэш пулов ключей
 - [x] Fallback по ключам и провайдерам
+- [x] HTTP endpoint `POST /v1/chat/completions`
+- [ ] Аутентификация клиентов и rate limit
 - [ ] Сохранение состояния ключей (cooldown, last_used_at) в БД
 - [ ] Streaming в адаптере (SSE)
 - [ ] Circuit breaker

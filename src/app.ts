@@ -1,8 +1,19 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 
 import type { Env } from './config/env.js';
+import {
+  registerChatCompletionRoute,
+  type ChatCompletionHandler,
+} from './routes/chatCompletions.js';
 
-export function buildApp(env: Env): FastifyInstance {
+export interface AppDependencies {
+  router?: ChatCompletionHandler;
+}
+
+export function buildApp(
+  env: Env,
+  dependencies: AppDependencies = {},
+): FastifyInstance {
   const app = Fastify({
     logger: {
       level: env.LOG_LEVEL,
@@ -27,10 +38,12 @@ export function buildApp(env: Env): FastifyInstance {
     },
   }));
 
+  registerChatCompletionRoute(app, dependencies);
+
   app.get('/', async () => ({
     name: 'llm-gateway',
     version: '0.1.0',
-    endpoints: ['/health', '/ready'],
+    endpoints: ['/health', '/ready', '/v1/chat/completions'],
   }));
 
   return app;

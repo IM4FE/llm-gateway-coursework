@@ -1,14 +1,53 @@
+import { createProviderAdapter } from './adapters/createProviderAdapter.js';
 import { buildApp } from './app.js';
 import { loadEnv } from './config/env.js';
+import { PoolRegistry } from './core/PoolRegistry.js';
+import { Router } from './core/Router.js';
+import { createApiKeyRepository } from './db/apiKeyRepository.js';
+import { createDatabase } from './db/client.js';
+import { createDeploymentResolver } from './routes/deploymentResolver.js';
+import { createRouteRepository } from './routes/routeRepository.js';
 
 const env = loadEnv();
-const app = buildApp(env);
+const database = createDatabase(env);
+
+const apiKeys = createApiKeyRepository(database.db, env.ENCRYPTION_KEY);
+const pools = new PoolRegistry((providerId) => apiKeys.createPool(providerId));
+const routes = createRouteRepository(database.db);
+
+const router = new Router(
+  createDeploymentResolver({
+    routes,
+    pools,
+    createAdapter: (row) =>
+      createProviderAdapter(row.providerName, row.providerType),
+    headersFor: (row) => {
+      if (row.providerName !== 'OpenRouter') {
+        return undefined;
+      }
+
+      const headers: Record<string, string> = {};
+
+      if (env.OPENROUTER_REFERER !== undefined) {
+        headers['HTTP-Referer'] = env.OPENROUTER_REFERER;
+      }
+      if (env.OPENROUTER_TITLE !== undefined) {
+        headers['X-Title'] = env.OPENROUTER_TITLE;
+      }
+
+      return Object.keys(headers).length > 0 ? headers : undefined;
+    },
+  }),
+);
+
+const app = buildApp(env, { router });
 
 const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
   app.log.info({ signal }, 'shutting down');
 
   try {
     await app.close();
+    await database.close();
     process.exit(0);
   } catch (error) {
     app.log.error(error, 'failed to shut down gracefully');
