@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { ChatOptions, ProviderChatRequest } from '../core/types.js';
+import type {
+  ChatOptions,
+  ChatStreamChunk,
+  ProviderChatRequest,
+} from '../core/types.js';
 import {
   OpenAICompatibleAdapter,
   type FetchLike,
@@ -44,6 +48,35 @@ function successfulResponse(): Response {
       total_tokens: 12,
     },
   });
+}
+
+function sseResponse(chunks: string[], status = 200): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(encoder.encode(chunk));
+      }
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    status,
+    headers: { 'Content-Type': 'text/event-stream' },
+  });
+}
+
+async function collectStream(
+  stream: AsyncIterable<ChatStreamChunk>,
+): Promise<ChatStreamChunk[]> {
+  const chunks: ChatStreamChunk[] = [];
+
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+  }
+
+  return chunks;
 }
 
 describe('OpenAICompatibleAdapter', () => {
@@ -323,5 +356,128 @@ describe('OpenAICompatibleAdapter', () => {
     const response = await adapter.chat(request, options);
 
     expect(response.usage.totalTokens).toBe(10);
+  });
+});
+
+describe('OpenAICompatibleAdapter streaming', () => {
+  it('parses deltas, finish reason and usage from SSE', async () => {
+    const fetchMock = vi.fn<FetchLike>();
+    fetchMock.mockResolvedValue(
+      sseResponse([
+        'data: {"choices":[{"delta":{"content":"При"}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":"вет"}}]}\n\n',
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+        'data: {"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}\n\n',
+        'data: [DONE]\n\n',
+      ]),
+    );
+
+    const adapter = new OpenAICompatibleAdapter('OpenRouter', fetchMock);
+    const chunks = await collectStream(adapter.chatStream(request, options));
+
+    expect(chunks).toEqual([
+      { type: 'delta', content: 'При' },
+      { type: 'delta', content: 'вет' },
+      {
+        type: 'done',
+        finishReason: 'stop',
+        usage: {
+          promptTokens: 3,
+          completionTokens: 2,
+          totalTokens: 5,
+        },
+      },
+    ]);
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]![1]?.body));
+
+    expect(body).toMatchObject({
+      stream: true,
+      stream_options: { include_usage: true },
+    });
+    expect(fetchMock.mock.calls[0]![1]?.headers).toMatchObject({
+      Accept: 'text/event-stream',
+    });
+  });
+
+  it('handles SSE events split across network chunks and CRLF', async () => {
+    const payload =
+      'data: {"choices":[{"delta":{"content":"ok"}}]}\r\n\r\n' +
+      'data: [DONE]\r\n\r\n';
+    const parts = payload.match(/[\s\S]{1,7}/g) ?? [];
+    const fetchMock = vi.fn<FetchLike>();
+    fetchMock.mockResolvedValue(sseResponse(parts));
+
+    const adapter = new OpenAICompatibleAdapter('OpenRouter', fetchMock);
+
+    await expect(
+      collectStream(adapter.chatStream(request, options)),
+    ).resolves.toEqual([
+      { type: 'delta', content: 'ok' },
+      { type: 'done', finishReason: 'unknown' },
+    ]);
+  });
+
+  it('ignores SSE comments and empty data lines', async () => {
+    const fetchMock = vi.fn<FetchLike>();
+    fetchMock.mockResolvedValue(
+      sseResponse([
+        ': ping\n\n',
+        'data:\n\n',
+        'data: {"choices":[{"delta":{"content":"a"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ]),
+    );
+
+    const adapter = new OpenAICompatibleAdapter('OpenRouter', fetchMock);
+
+    await expect(
+      collectStream(adapter.chatStream(request, options)),
+    ).resolves.toEqual([
+      { type: 'delta', content: 'a' },
+      { type: 'done', finishReason: 'unknown' },
+    ]);
+  });
+
+  it('maps an HTTP error before the stream starts', async () => {
+    const fetchMock = vi.fn<FetchLike>();
+    fetchMock.mockResolvedValue(jsonResponse({ error: 'limited' }, 429));
+
+    const adapter = new OpenAICompatibleAdapter('OpenRouter', fetchMock);
+
+    await expect(
+      collectStream(adapter.chatStream(request, options)),
+    ).rejects.toMatchObject({
+      code: 'rate_limited',
+      providerStatus: 429,
+    });
+  });
+
+  it('rejects invalid JSON inside an SSE event', async () => {
+    const fetchMock = vi.fn<FetchLike>();
+    fetchMock.mockResolvedValue(sseResponse(['data: not-json\n\n']));
+
+    const adapter = new OpenAICompatibleAdapter('OpenRouter', fetchMock);
+
+    await expect(
+      collectStream(adapter.chatStream(request, options)),
+    ).rejects.toMatchObject({
+      code: 'upstream_error',
+      message: 'Provider returned invalid stream data',
+    });
+  });
+
+  it('rejects a response without a body', async () => {
+    const fetchMock = vi.fn<FetchLike>();
+    fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
+
+    const adapter = new OpenAICompatibleAdapter('OpenRouter', fetchMock);
+
+    await expect(
+      collectStream(adapter.chatStream(request, options)),
+    ).rejects.toMatchObject({
+      code: 'upstream_error',
+      message: 'Provider returned an empty stream',
+    });
   });
 });

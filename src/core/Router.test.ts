@@ -13,6 +13,8 @@ import type {
   ChatOptions,
   ChatRequest,
   ChatStreamChunk,
+  ChatUsage,
+  FinishReason,
   LLMProviderAdapter,
   ProviderChatRequest,
   ProviderChatResponse,
@@ -64,6 +66,82 @@ class FakeAdapter implements LLMProviderAdapter {
   async *chatStream(): AsyncIterable<ChatStreamChunk> {
     throw new Error('chatStream is not used in Router tests');
   }
+}
+
+type StreamItem = ChatStreamChunk | Error;
+type StreamOutcome = StreamItem[] | Error;
+
+class FakeStreamingAdapter implements LLMProviderAdapter {
+  readonly type: ProviderType = 'mock';
+  readonly streamCalls: Array<{
+    request: ProviderChatRequest;
+    options: ChatOptions;
+  }> = [];
+
+  private readonly outcomes: StreamOutcome[];
+
+  constructor(
+    readonly name: string,
+    ...outcomes: StreamOutcome[]
+  ) {
+    this.outcomes = outcomes;
+  }
+
+  async chat(): Promise<ProviderChatResponse> {
+    throw new Error('chat is not used in streaming Router tests');
+  }
+
+  async *chatStream(
+    request: ProviderChatRequest,
+    options: ChatOptions,
+  ): AsyncIterable<ChatStreamChunk> {
+    this.streamCalls.push({ request, options });
+
+    const outcome = this.outcomes.shift();
+
+    if (outcome === undefined) {
+      throw new Error(`No stream outcome configured for ${this.name}`);
+    }
+
+    if (outcome instanceof Error) {
+      throw outcome;
+    }
+
+    for (const item of outcome) {
+      if (item instanceof Error) {
+        throw item;
+      }
+
+      yield item;
+    }
+  }
+}
+
+function delta(content: string): ChatStreamChunk {
+  return { type: 'delta', content };
+}
+
+function done(
+  finishReason: FinishReason = 'stop',
+  usage?: ChatUsage,
+): ChatStreamChunk {
+  return {
+    type: 'done',
+    finishReason,
+    ...(usage !== undefined ? { usage } : {}),
+  };
+}
+
+async function collectChunks(
+  stream: AsyncIterable<ChatStreamChunk>,
+): Promise<ChatStreamChunk[]> {
+  const chunks: ChatStreamChunk[] = [];
+
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+  }
+
+  return chunks;
 }
 
 function response(
@@ -655,5 +733,175 @@ describe('Router key state observer', () => {
     await expect(router.chat(request)).resolves.toMatchObject({
       content: 'ok',
     });
+  });
+});
+
+describe('Router streaming', () => {
+  it('yields chunks and reports a successful attempt', async () => {
+    const adapter = new FakeStreamingAdapter('Mock', [
+      delta('При'),
+      delta('вет'),
+      done('stop', {
+        promptTokens: 3,
+        completionTokens: 2,
+        totalTokens: 5,
+      }),
+    ]);
+    const keyPool = makePool('a');
+    const attempts: RouterAttempt[] = [];
+    const events: KeyStateEvent[] = [];
+    const router = makeRouter(
+      [makeDeployment({ adapter, keyPool })],
+      { onKeyState: (event) => events.push(event) },
+    );
+
+    const chunks = await collectChunks(
+      router.chatStream(
+        { ...request, stream: true },
+        { onAttempt: (attempt) => attempts.push(attempt) },
+      ),
+    );
+
+    expect(chunks).toEqual([
+      delta('При'),
+      delta('вет'),
+      done('stop', {
+        promptTokens: 3,
+        completionTokens: 2,
+        totalTokens: 5,
+      }),
+    ]);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({
+      attemptNo: 1,
+      providerId: 'provider-1',
+      apiKeyId: 'a',
+      upstreamModel: 'upstream-model',
+      status: 'success',
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      keyId: 'a',
+      type: 'success',
+    });
+    expect(keyPool.snapshot().keys[0]?.usageCount).toBe(1);
+  });
+
+  it('falls back to the next key before the first chunk', async () => {
+    const first = new FakeStreamingAdapter(
+      'First',
+      gatewayError('rate_limited'),
+    );
+    const second = new FakeStreamingAdapter('Second', [
+      delta('ok'),
+      done('stop'),
+    ]);
+    const firstPool = makePool('a');
+    const secondPool = makePool('b');
+    const attempts: RouterAttempt[] = [];
+    const router = makeRouter([
+      makeDeployment({
+        adapter: first,
+        keyPool: firstPool,
+        providerId: 'provider-1',
+      }),
+      makeDeployment({
+        adapter: second,
+        keyPool: secondPool,
+        providerId: 'provider-2',
+      }),
+    ]);
+
+    const chunks = await collectChunks(
+      router.chatStream(
+        { ...request, stream: true },
+        { onAttempt: (attempt) => attempts.push(attempt) },
+      ),
+    );
+
+    expect(chunks).toEqual([delta('ok'), done('stop')]);
+    expect(first.streamCalls).toHaveLength(1);
+    expect(second.streamCalls).toHaveLength(1);
+    expect(attempts.map((attempt) => attempt.status)).toEqual([
+      'error',
+      'success',
+    ]);
+    expect(attempts[0]).toMatchObject({
+      apiKeyId: 'a',
+      errorCode: 'rate_limited',
+    });
+    expect(attempts[1]).toMatchObject({
+      apiKeyId: 'b',
+      status: 'success',
+    });
+    expect(firstPool.snapshot().keys[0]?.state).toBe('cooldown');
+  });
+
+  it('does not fall back after the first chunk', async () => {
+    const first = new FakeStreamingAdapter('First', [
+      delta('partial'),
+      gatewayError('upstream_error'),
+    ]);
+    const second = new FakeStreamingAdapter('Second', [
+      delta('never'),
+      done('stop'),
+    ]);
+    const router = makeRouter([
+      makeDeployment({
+        adapter: first,
+        keyPool: makePool('a'),
+        providerId: 'provider-1',
+      }),
+      makeDeployment({
+        adapter: second,
+        keyPool: makePool('b'),
+        providerId: 'provider-2',
+      }),
+    ]);
+    const received: ChatStreamChunk[] = [];
+
+    await expect(
+      (async () => {
+        for await (const chunk of router.chatStream({
+          ...request,
+          stream: true,
+        })) {
+          received.push(chunk);
+        }
+      })(),
+    ).rejects.toMatchObject({
+      code: 'upstream_error',
+    });
+
+    expect(received).toEqual([delta('partial')]);
+    expect(second.streamCalls).toHaveLength(0);
+  });
+
+  it('rejects when no route is configured', async () => {
+    const router = new Router(() => []);
+
+    await expect(
+      collectChunks(router.chatStream({ ...request, stream: true })),
+    ).rejects.toMatchObject({
+      code: 'no_route',
+    });
+  });
+
+  it('rejects when no key is available', async () => {
+    const adapter = new FakeStreamingAdapter('Mock', [
+      delta('never'),
+      done('stop'),
+    ]);
+    const router = makeRouter([
+      makeDeployment({ adapter, keyPool: makePool() }),
+    ]);
+
+    await expect(
+      collectChunks(router.chatStream({ ...request, stream: true })),
+    ).rejects.toMatchObject({
+      code: 'all_providers_failed',
+      message: expect.stringContaining('No API keys available'),
+    });
+    expect(adapter.streamCalls).toHaveLength(0);
   });
 });

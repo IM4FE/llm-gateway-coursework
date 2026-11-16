@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto';
+import type { ServerResponse } from 'node:http';
 import { performance } from 'node:perf_hooks';
 
-import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
+import type {
+  FastifyBaseLogger,
+  FastifyInstance,
+  FastifyReply,
+} from 'fastify';
 import { z } from 'zod';
 
 import type {
@@ -13,11 +18,16 @@ import {
   toGatewayError,
   type GatewayErrorCode,
 } from '../core/errors.js';
-import type { RateLimiter } from '../core/RateLimiter.js';
+import type {
+  RateLimitDecision,
+  RateLimiter,
+} from '../core/RateLimiter.js';
 import type { RouterAttempt, RouterChatOptions } from '../core/Router.js';
 import type {
   ChatRequest,
   ChatResponse,
+  ChatStreamChunk,
+  ChatUsage,
   FinishReason,
 } from '../core/types.js';
 import type {
@@ -36,6 +46,15 @@ export interface ChatCompletionHandler {
     request: ChatRequest,
     options?: RouterChatOptions,
   ): Promise<ChatResponse>;
+  /**
+   * Streaming необязателен: старые фейки и тесты могут реализовывать
+   * только `chat`. Если метода нет, запрос со `stream: true` получит
+   * понятную ошибку конфигурации.
+   */
+  chatStream?(
+    request: ChatRequest,
+    options?: RouterChatOptions,
+  ): AsyncIterable<ChatStreamChunk>;
 }
 
 export interface ChatCompletionDependencies {
@@ -217,6 +236,33 @@ export function registerChatCompletionRoute(
     const attempts: RouterAttempt[] = [];
     const chatRequest = toChatRequest(parsed.data);
 
+    if (parsed.data.stream === true) {
+      if (dependencies.router.chatStream === undefined) {
+        const error = new GatewayError({
+          code: 'internal_error',
+          message: 'Streaming is not supported by the configured router',
+        });
+
+        return reply.status(error.httpStatus).send(toErrorResponse(error));
+      }
+
+      await handleStreamingCompletion({
+        reply,
+        logger: request.log,
+        router: dependencies.router,
+        requestLogs: dependencies.requestLogs,
+        requestId,
+        startedAt,
+        client,
+        rateLimit,
+        body: parsed.data,
+        chatRequest,
+        attempts,
+      });
+
+      return reply;
+    }
+
     try {
       const response = await dependencies.router.chat(chatRequest, {
         onAttempt: (attempt) => {
@@ -239,7 +285,7 @@ export function registerChatCompletionRoute(
         ttftMs: response.ttftMs ?? null,
         status: 'success',
         errorCode: null,
-        isStream: parsed.data.stream === true,
+        isStream: false,
         attempts: toAttemptRecords(attempts),
       });
 
@@ -264,7 +310,7 @@ export function registerChatCompletionRoute(
         ttftMs: null,
         status: requestStatusFromError(gatewayError, attempts),
         errorCode: gatewayError.code,
-        isStream: parsed.data.stream === true,
+        isStream: false,
         attempts: toAttemptRecords(attempts),
       });
 
@@ -278,6 +324,399 @@ export function registerChatCompletionRoute(
         .send(toErrorResponse(gatewayError));
     }
   });
+}
+
+interface StreamingCompletionParams {
+  reply: FastifyReply;
+  logger: FastifyBaseLogger;
+  router: ChatCompletionHandler;
+  requestLogs: RequestLogRepository | undefined;
+  requestId: string;
+  startedAt: number;
+  client: AuthenticatedClient;
+  rateLimit: RateLimitDecision;
+  body: ChatCompletionRequestBody;
+  chatRequest: ChatRequest;
+  attempts: RouterAttempt[];
+}
+
+interface StreamingLogResult {
+  ttftMs: number | null;
+  usage: ChatUsage | undefined;
+  status: RequestLogRecord['status'];
+  errorCode: GatewayErrorCode | null;
+}
+
+/**
+ * Отдаёт клиенту SSE-поток.
+ *
+ * Сначала ждём первый чанк от Router. Пока он не пришёл, ошибку
+ * ещё можно вернуть обычным JSON-ответом с корректным HTTP-статусом.
+ * После первого чанка заголовки уже отправлены, поэтому ошибка
+ * сообщается событием `event: error`.
+ */
+async function handleStreamingCompletion(
+  params: StreamingCompletionParams,
+): Promise<void> {
+  const { reply, router } = params;
+  const chatStream = router.chatStream;
+
+  if (chatStream === undefined) {
+    const error = new GatewayError({
+      code: 'internal_error',
+      message: 'Streaming is not supported by the configured router',
+    });
+
+    reply.status(error.httpStatus).send(toErrorResponse(error));
+    return;
+  }
+
+  const controller = new AbortController();
+  let finished = false;
+
+  const onClose = (): void => {
+    if (!finished) {
+      controller.abort();
+    }
+  };
+
+  // Если клиент закроет соединение, upstream-запрос должен быть
+  // отменён, а не продолжать генерировать токены в пустоту.
+  reply.raw.once('close', onClose);
+
+  const iterator = chatStream
+    .call(router, params.chatRequest, {
+      signal: controller.signal,
+      onAttempt: (attempt) => {
+        params.attempts.push(attempt);
+      },
+    })
+    [Symbol.asyncIterator]();
+
+  let first: IteratorResult<ChatStreamChunk>;
+
+  try {
+    first = await iterator.next();
+  } catch (error) {
+    const gatewayError = toGatewayError(error);
+
+    finished = true;
+    reply.raw.off('close', onClose);
+    await closeIterator(iterator);
+
+    await persistStreamLog(params, {
+      ttftMs: null,
+      usage: undefined,
+      status: requestStatusFromError(gatewayError, params.attempts),
+      errorCode: gatewayError.code,
+    });
+
+    params.logger.warn(
+      {
+        err: gatewayError,
+        code: gatewayError.code,
+        requestId: params.requestId,
+      },
+      'streaming chat completion failed before first chunk',
+    );
+
+    if (gatewayError.code === 'client_disconnected') {
+      reply.hijack();
+
+      if (!reply.raw.writableEnded) {
+        reply.raw.end();
+      }
+      return;
+    }
+
+    reply.status(gatewayError.httpStatus).send(toErrorResponse(gatewayError));
+    return;
+  }
+
+  const ttftMs = Math.round(performance.now() - params.startedAt);
+
+  reply.hijack();
+
+  const created = Math.floor(Date.now() / 1_000);
+  const id = `chatcmpl-${params.requestId}`;
+
+  reply.raw.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+    'X-Request-Id': params.requestId,
+    'X-RateLimit-Limit': String(params.rateLimit.limit),
+    'X-RateLimit-Remaining': String(params.rateLimit.remaining),
+    'X-RateLimit-Reset': String(
+      Math.ceil(params.rateLimit.resetAt / 1_000),
+    ),
+  });
+
+  let finishReason: FinishReason = 'unknown';
+  let usage: ChatUsage | undefined;
+
+  try {
+    await writeSse(
+      reply.raw,
+      formatSseData(roleChunk(id, created, params.body.model)),
+    );
+
+    let current = first;
+
+    while (!current.done) {
+      const chunk = current.value;
+
+      if (chunk.type === 'delta') {
+        if (chunk.content.length > 0) {
+          await writeSse(
+            reply.raw,
+            formatSseData(
+              deltaChunk(id, created, params.body.model, chunk.content),
+            ),
+          );
+        }
+      } else {
+        finishReason = chunk.finishReason;
+
+        if (chunk.usage !== undefined) {
+          usage = chunk.usage;
+        }
+      }
+
+      current = await iterator.next();
+    }
+
+    await writeSse(
+      reply.raw,
+      formatSseData(
+        finalChunk(id, created, params.body.model, finishReason, usage),
+      ),
+    );
+    await writeSse(reply.raw, SSE_DONE);
+
+    finished = true;
+    reply.raw.off('close', onClose);
+    reply.raw.end();
+
+    await persistStreamLog(params, {
+      ttftMs,
+      usage,
+      status: 'success',
+      errorCode: null,
+    });
+  } catch (error) {
+    const gatewayError = controller.signal.aborted
+      ? new GatewayError({
+          code: 'client_disconnected',
+          message: 'Client disconnected during the stream',
+          cause: error,
+        })
+      : toGatewayError(error);
+
+    finished = true;
+    reply.raw.off('close', onClose);
+
+    if (!reply.raw.writableEnded && !reply.raw.destroyed) {
+      try {
+        await writeSse(reply.raw, formatSseError(gatewayError));
+        await writeSse(reply.raw, SSE_DONE);
+        reply.raw.end();
+      } catch {
+        // Клиент уже мог отключиться.
+      }
+    }
+
+    await persistStreamLog(params, {
+      ttftMs,
+      usage,
+      status: requestStatusFromError(gatewayError, params.attempts),
+      errorCode: gatewayError.code,
+    });
+
+    params.logger.warn(
+      {
+        err: gatewayError,
+        code: gatewayError.code,
+        requestId: params.requestId,
+      },
+      'streaming chat completion failed',
+    );
+  } finally {
+    finished = true;
+    reply.raw.off('close', onClose);
+    await closeIterator(iterator);
+  }
+}
+
+async function persistStreamLog(
+  params: StreamingCompletionParams,
+  result: StreamingLogResult,
+): Promise<void> {
+  const last = lastAttempt(params.attempts);
+
+  await persistRequestLog(params.requestLogs, params.logger, {
+    requestId: params.requestId,
+    clientId: params.client.id,
+    requestedModel: params.body.model,
+    actualModel: last?.upstreamModel ?? null,
+    providerId: last?.providerId ?? null,
+    apiKeyId: last?.apiKeyId ?? null,
+    promptTokens: result.usage?.promptTokens ?? 0,
+    completionTokens: result.usage?.completionTokens ?? 0,
+    totalTokens: result.usage?.totalTokens ?? 0,
+    costMicros: 0,
+    latencyMs: Math.round(performance.now() - params.startedAt),
+    ttftMs: result.ttftMs,
+    status: result.status,
+    errorCode: result.errorCode,
+    isStream: true,
+    attempts: toAttemptRecords(params.attempts),
+  });
+}
+
+interface ChatCompletionChunk {
+  id: string;
+  object: 'chat.completion.chunk';
+  created: number;
+  model: string;
+  choices: Array<{
+    index: number;
+    delta: {
+      role?: 'assistant';
+      content?: string;
+    };
+    finish_reason: FinishReason | null;
+  }>;
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+}
+
+function roleChunk(
+  id: string,
+  created: number,
+  model: string,
+): ChatCompletionChunk {
+  return {
+    id,
+    object: 'chat.completion.chunk',
+    created,
+    model,
+    choices: [
+      {
+        index: 0,
+        delta: { role: 'assistant' },
+        finish_reason: null,
+      },
+    ],
+  };
+}
+
+function deltaChunk(
+  id: string,
+  created: number,
+  model: string,
+  content: string,
+): ChatCompletionChunk {
+  return {
+    id,
+    object: 'chat.completion.chunk',
+    created,
+    model,
+    choices: [
+      {
+        index: 0,
+        delta: { content },
+        finish_reason: null,
+      },
+    ],
+  };
+}
+
+function finalChunk(
+  id: string,
+  created: number,
+  model: string,
+  finishReason: FinishReason,
+  usage: ChatUsage | undefined,
+): ChatCompletionChunk {
+  return {
+    id,
+    object: 'chat.completion.chunk',
+    created,
+    model,
+    choices: [
+      {
+        index: 0,
+        delta: {},
+        finish_reason: finishReason,
+      },
+    ],
+    ...(usage !== undefined
+      ? {
+          usage: {
+            prompt_tokens: usage.promptTokens,
+            completion_tokens: usage.completionTokens,
+            total_tokens: usage.totalTokens,
+          },
+        }
+      : {}),
+  };
+}
+
+const SSE_DONE = 'data: [DONE]\n\n';
+
+function formatSseData(payload: unknown): string {
+  return `data: ${JSON.stringify(payload)}\n\n`;
+}
+
+function formatSseError(error: GatewayError): string {
+  return `event: error\ndata: ${JSON.stringify(toErrorResponse(error))}\n\n`;
+}
+
+/**
+ * Пишет SSE-блок в сырой ответ и учитывает backpressure.
+ *
+ * `write()` возвращает false, когда буфер сокета заполнен. В этом
+ * случае ждём `drain`. `close` тоже завершает ожидание: клиент мог
+ * отключиться, и следующий `iterator.next()` увидит abort.
+ */
+function writeSse(res: ServerResponse, payload: string): Promise<void> {
+  if (res.destroyed || res.writableEnded) {
+    return Promise.resolve();
+  }
+
+  if (res.write(payload)) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    const done = (): void => {
+      res.off('drain', done);
+      res.off('close', done);
+      resolve();
+    };
+
+    res.once('drain', done);
+    res.once('close', done);
+  });
+}
+
+async function closeIterator(
+  iterator: AsyncIterator<ChatStreamChunk>,
+): Promise<void> {
+  if (typeof iterator.return !== 'function') {
+    return;
+  }
+
+  try {
+    await iterator.return();
+  } catch {
+    // Закрытие итератора — вспомогательная операция.
+  }
 }
 
 export function toChatRequest(
@@ -377,6 +816,10 @@ function requestStatusFromError(
   error: GatewayError,
   attempts: RouterAttempt[],
 ): RequestLogRecord['status'] {
+  if (error.code === 'client_disconnected') {
+    return 'cancelled';
+  }
+
   if (
     error.code === 'provider_timeout' ||
     lastAttempt(attempts)?.status === 'timeout'

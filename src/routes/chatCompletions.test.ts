@@ -10,7 +10,13 @@ import type { Env } from '../config/env.js';
 import { GatewayError } from '../core/errors.js';
 import type { RateLimitDecision, RateLimiter } from '../core/RateLimiter.js';
 import type { RouterAttempt, RouterChatOptions } from '../core/Router.js';
-import type { ChatRequest, ChatResponse } from '../core/types.js';
+import type {
+  ChatRequest,
+  ChatResponse,
+  ChatStreamChunk,
+  ChatUsage,
+  FinishReason,
+} from '../core/types.js';
 import {
   RequestLogRepository,
   type RequestLogRecord,
@@ -91,6 +97,83 @@ class FakeRouter implements ChatCompletionHandler {
 
     return this.outcome;
   }
+}
+
+type StreamItem = ChatStreamChunk | Error;
+
+class FakeStreamingRouter implements ChatCompletionHandler {
+  readonly streamCalls: ChatRequest[] = [];
+
+  constructor(
+    private readonly items: StreamItem[],
+    private readonly attempts: RouterAttempt[] = [],
+  ) {}
+
+  async chat(): Promise<ChatResponse> {
+    throw new Error('chat is not used in streaming route tests');
+  }
+
+  async *chatStream(
+    request: ChatRequest,
+    options?: RouterChatOptions,
+  ): AsyncIterable<ChatStreamChunk> {
+    this.streamCalls.push(request);
+
+    for (const attempt of this.attempts) {
+      options?.onAttempt?.(attempt);
+    }
+
+    for (const item of this.items) {
+      if (item instanceof Error) {
+        throw item;
+      }
+
+      yield item;
+    }
+  }
+}
+
+function delta(content: string): ChatStreamChunk {
+  return { type: 'delta', content };
+}
+
+function done(
+  finishReason: FinishReason = 'stop',
+  usage?: ChatUsage,
+): ChatStreamChunk {
+  return {
+    type: 'done',
+    finishReason,
+    ...(usage !== undefined ? { usage } : {}),
+  };
+}
+
+interface ParsedSseEvent {
+  event?: string;
+  data: string;
+}
+
+function parseSse(payload: string): ParsedSseEvent[] {
+  return payload
+    .split(/\r?\n\r?\n/)
+    .filter((block) => block.trim().length > 0)
+    .map((block) => {
+      let event: string | undefined;
+      const dataLines: string[] = [];
+
+      for (const line of block.split(/\r?\n/)) {
+        if (line.startsWith('event:')) {
+          event = line.slice(6).trim();
+        } else if (line.startsWith('data:')) {
+          dataLines.push(line.slice(5).trimStart());
+        }
+      }
+
+      return {
+        ...(event !== undefined ? { event } : {}),
+        data: dataLines.join('\n'),
+      };
+    });
 }
 
 function chatResponse(): ChatResponse {
@@ -754,5 +837,276 @@ describe('request logging on POST /v1/chat/completions', () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
+  });
+});
+
+describe('streaming on POST /v1/chat/completions', () => {
+  it('returns OpenAI-compatible SSE chunks and finishes with [DONE]', async () => {
+    const writer = vi.fn<RequestLogWriter>().mockResolvedValue(undefined);
+    const router = new FakeStreamingRouter(
+      [
+        delta('При'),
+        delta('вет'),
+        done('stop', {
+          promptTokens: 3,
+          completionTokens: 2,
+          totalTokens: 5,
+        }),
+      ],
+      [successAttempt()],
+    );
+    const server = createApp(
+      router,
+      allowAllClients,
+      allowAllLimiter,
+      new RequestLogRepository(writer),
+    );
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'fast-model',
+        messages: [{ role: 'user', content: 'Привет!' }],
+        stream: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/event-stream');
+    expect(response.headers['cache-control']).toContain('no-cache');
+    expect(response.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
+    expect(response.headers['x-ratelimit-limit']).toBe('60');
+
+    const events = parseSse(response.payload);
+
+    expect(events.at(-1)).toEqual({ data: '[DONE]' });
+
+    const chunks = events
+      .slice(0, -1)
+      .map((event) => JSON.parse(event.data) as Record<string, unknown>);
+
+    expect(chunks[0]).toMatchObject({
+      id: `chatcmpl-${response.headers['x-request-id']}`,
+      object: 'chat.completion.chunk',
+      model: 'fast-model',
+      choices: [
+        {
+          index: 0,
+          delta: { role: 'assistant' },
+          finish_reason: null,
+        },
+      ],
+    });
+    expect(chunks[1]).toMatchObject({
+      choices: [{ delta: { content: 'При' }, finish_reason: null }],
+    });
+    expect(chunks[2]).toMatchObject({
+      choices: [{ delta: { content: 'вет' }, finish_reason: null }],
+    });
+    expect(chunks[3]).toMatchObject({
+      choices: [{ delta: {}, finish_reason: 'stop' }],
+      usage: {
+        prompt_tokens: 3,
+        completion_tokens: 2,
+        total_tokens: 5,
+      },
+    });
+
+    expect(router.streamCalls).toHaveLength(1);
+    expect(router.streamCalls[0]).toMatchObject({
+      model: 'fast-model',
+      stream: true,
+    });
+
+    expect(writer).toHaveBeenCalledTimes(1);
+
+    const record = writer.mock.calls[0]![0];
+
+    expect(record).toMatchObject({
+      clientId: 'client-1',
+      requestedModel: 'fast-model',
+      actualModel: 'upstream-model',
+      providerId: 'provider-1',
+      apiKeyId: 'key-1',
+      promptTokens: 3,
+      completionTokens: 2,
+      totalTokens: 5,
+      status: 'success',
+      errorCode: null,
+      isStream: true,
+    });
+    expect(record.ttftMs).toEqual(expect.any(Number));
+    expect(record.latencyMs).toEqual(expect.any(Number));
+  });
+
+  it('returns a JSON error when the stream fails before the first chunk', async () => {
+    const writer = vi.fn<RequestLogWriter>().mockResolvedValue(undefined);
+    const router = new FakeStreamingRouter(
+      [
+        new GatewayError({
+          code: 'upstream_error',
+          message: 'provider exploded',
+          providerStatus: 500,
+        }),
+      ],
+      [
+        successAttempt({
+          status: 'error',
+          httpStatus: 500,
+          errorCode: 'upstream_error',
+        }),
+      ],
+    );
+    const server = createApp(
+      router,
+      allowAllClients,
+      allowAllLimiter,
+      new RequestLogRepository(writer),
+    );
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'fast-model',
+        messages: [{ role: 'user', content: 'Привет!' }],
+        stream: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(502);
+    expect(response.headers['content-type']).toContain('application/json');
+    expect(response.json()).toMatchObject({
+      error: {
+        code: 'upstream_error',
+        message: 'provider exploded',
+        provider_status: 500,
+      },
+    });
+
+    const record = writer.mock.calls[0]![0];
+
+    expect(record).toMatchObject({
+      status: 'error',
+      errorCode: 'upstream_error',
+      isStream: true,
+      ttftMs: null,
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+    });
+  });
+
+  it('sends an SSE error event when the stream fails after the first chunk', async () => {
+    const writer = vi.fn<RequestLogWriter>().mockResolvedValue(undefined);
+    const router = new FakeStreamingRouter(
+      [
+        delta('partial'),
+        new GatewayError({
+          code: 'upstream_error',
+          message: 'stream broke',
+        }),
+      ],
+      [successAttempt()],
+    );
+    const server = createApp(
+      router,
+      allowAllClients,
+      allowAllLimiter,
+      new RequestLogRepository(writer),
+    );
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'fast-model',
+        messages: [{ role: 'user', content: 'Привет!' }],
+        stream: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+
+    const events = parseSse(response.payload);
+    const errorEvent = events.find((event) => event.event === 'error');
+
+    expect(errorEvent).toBeDefined();
+    expect(JSON.parse(errorEvent!.data)).toMatchObject({
+      error: {
+        code: 'upstream_error',
+        message: 'stream broke',
+      },
+    });
+    expect(events.at(-1)).toEqual({ data: '[DONE]' });
+
+    const record = writer.mock.calls[0]![0];
+
+    expect(record).toMatchObject({
+      status: 'error',
+      errorCode: 'upstream_error',
+      isStream: true,
+    });
+    expect(record.ttftMs).toEqual(expect.any(Number));
+  });
+
+  it('marks a client disconnect before the first chunk as cancelled', async () => {
+    const writer = vi.fn<RequestLogWriter>().mockResolvedValue(undefined);
+    const router = new FakeStreamingRouter([
+      new GatewayError({
+        code: 'client_disconnected',
+        message: 'client went away',
+      }),
+    ]);
+    const server = createApp(
+      router,
+      allowAllClients,
+      allowAllLimiter,
+      new RequestLogRepository(writer),
+    );
+
+    await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'fast-model',
+        messages: [{ role: 'user', content: 'Привет!' }],
+        stream: true,
+      },
+    });
+
+    expect(writer).toHaveBeenCalledTimes(1);
+
+    const record = writer.mock.calls[0]![0];
+
+    expect(record).toMatchObject({
+      status: 'cancelled',
+      errorCode: 'client_disconnected',
+      isStream: true,
+    });
+  });
+
+  it('returns a clear error when the router does not support streaming', async () => {
+    const router = new FakeRouter(chatResponse());
+    const server = createApp(router);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'fast-model',
+        messages: [{ role: 'user', content: 'Привет!' }],
+        stream: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toMatchObject({
+      error: {
+        code: 'internal_error',
+        message: 'Streaming is not supported by the configured router',
+      },
+    });
   });
 });

@@ -316,13 +316,21 @@ curl -N \
 
 ## 11. Чек-лист реализации в проекте
 
-- [ ] `POST /v1/chat/completions` принимает `stream: true`.
-- [ ] Ответ имеет `Content-Type: text/event-stream`.
-- [ ] Каждый чанк — валидный JSON в `data:`.
-- [ ] Поток завершается `data: [DONE]`.
-- [ ] Ошибка до первого чанка запускает fallback.
-- [ ] Ошибка после первого чанка отправляет `event: error`.
-- [ ] При отключении клиента upstream отменяется.
-- [ ] В `request_logs` пишутся `ttft_ms`, `latency_ms`, `status`.
-- [ ] В `request_attempts` видно, какой провайдер и ключ сработали.
-- [ ] Тест проверяет, что несколько чанков приходят по порядку.
+- [x] `POST /v1/chat/completions` принимает `stream: true`.
+- [x] Ответ имеет `Content-Type: text/event-stream`.
+- [x] Каждый чанк — валидный JSON в `data:`.
+- [x] Поток завершается `data: [DONE]`.
+- [x] Ошибка до первого чанка запускает fallback.
+- [x] Ошибка после первого чанка отправляет `event: error`.
+- [x] При отключении клиента upstream отменяется.
+- [x] В `request_logs` пишутся `ttft_ms`, `latency_ms`, `status`.
+- [x] В `request_attempts` видно, какой провайдер и ключ сработали.
+- [x] Тест проверяет, что несколько чанков приходят по порядку.
+
+Реализация:
+
+- `OpenAICompatibleAdapter.chatStream` разбирает SSE с буфером, поддерживает
+  `\n\n` и `\r\n\r\n`, игнорирует комментарии и завершает поток по `[DONE]`;
+- `Router.chatStream` ждёт первый чанк и только до него делает fallback;
+- HTTP-слой вызывает `reply.hijack()`, пишет SSE в `reply.raw`, отменяет
+  upstream по `close` клиента и сохраняет журнал после завершения потока.

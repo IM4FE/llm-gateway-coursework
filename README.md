@@ -235,6 +235,90 @@ curl.exe -i -sS -X POST http://localhost:3000/v1/chat/completions `
   ответ провайдера, а ошибка сохранения попадёт в лог приложения;
 - `X-Request-Id` возвращается на всех ответах, включая ошибки.
 
+### Streaming (SSE)
+
+Если в запросе указать `"stream": true`, шлюз отвечает не одним JSON,
+а потоком Server-Sent Events:
+
+```http
+HTTP/1.1 200 OK
+Content-Type: text/event-stream; charset=utf-8
+Cache-Control: no-cache, no-transform
+X-Accel-Buffering: no
+X-Request-Id: 6f1c2a7e-0f6b-4a9c-9d7e-3b5a1c8e2d40
+```
+
+Формат чанков совместим с OpenAI:
+
+```text
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":...,"model":"fast-model","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":...,"model":"fast-model","choices":[{"index":0,"delta":{"content":"При"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":...,"model":"fast-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}
+
+data: [DONE]
+
+```
+
+Что происходит внутри:
+
+1. Адаптер отправляет провайдеру `stream: true` и
+   `stream_options: { include_usage: true }`.
+2. Router ждёт **первый чанк**. Пока его нет, ошибка провайдера ещё может
+   запустить fallback на другой ключ или deployment.
+3. После первого чанка HTTP-заголовки уже отправлены, поэтому fallback
+   невозможен. Если поток сломается, клиент получит событие:
+
+```text
+event: error
+data: {"error":{"message":"Provider stream failed","type":"api_error","code":"upstream_error"}}
+
+data: [DONE]
+
+```
+
+4. Если клиент закрыл соединение, upstream-запрос отменяется через
+   `AbortController`, а запись в журнале получает статус `cancelled`.
+5. В `request_logs` пишутся `is_stream = true`, `ttft_ms` (время до первого
+   токена), `latency_ms`, `usage`, `status` и все попытки Router'а.
+
+#### curl (bash / macOS / Linux)
+
+```sh
+curl -N -sS http://localhost:3000/v1/chat/completions \
+  -H "Authorization: Bearer $CLIENT_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"fast-model","messages":[{"role":"user","content":"Hello!"}],"stream":true}'
+```
+
+`-N` отключает буферизацию curl: текст должен появляться постепенно.
+
+#### curl.exe (Windows PowerShell)
+
+```powershell
+curl.exe -N -sS -X POST http://localhost:3000/v1/chat/completions `
+  -H "Authorization: Bearer $env:CLIENT_KEY" `
+  -H "Content-Type: application/json" `
+  -d '{"model":"fast-model","messages":[{"role":"user","content":"Hello!"}],"stream":true}'
+```
+
+Проверить журнал streaming-запроса:
+
+```sh
+docker compose exec postgres psql -U gateway -d llm_gateway -c \
+  "select request_id, status, is_stream, ttft_ms, latency_ms, total_tokens from request_logs order by created_at desc limit 5;"
+```
+
+Ограничения текущей реализации:
+
+- `timeoutMs` deployment'а действует на весь поток, а не на паузу между
+  чанками; для долгих ответов его нужно увеличить;
+- heartbeat-комментарии (`: ping`) пока не отправляются;
+- backpressure учитывается через `drain`, но без отдельного лимита буфера;
+- `usage` в streaming зависит от провайдера: если он не прислал
+  `stream_options`-чанк, токены будут `0`.
+
 ### Состояние ключей в БД
 
 Раньше cooldown и invalid-состояние жили только в памяти `KeyPool`:
@@ -371,7 +455,7 @@ deepseek/deepseek-r1:free
 - [x] Health/ready endpoints
 - [x] Доменные контракты и модель ошибок
 - [x] Схема БД и первая миграция Drizzle
-- [x] OpenAI-совместимый адаптер (OpenRouter, без streaming)
+- [x] OpenAI-совместимый адаптер (OpenRouter, JSON и SSE)
 - [x] Пул ключей в памяти: round-robin, cooldown, invalid-ключи
 - [x] Загрузка ключей из БД и шифрование AES-256-GCM
 - [x] Резолвер маршрутов из БД и кэш пулов ключей
@@ -382,8 +466,7 @@ deepseek/deepseek-r1:free
 - [x] Rate limit по клиентам (in-memory, фиксированное окно)
 - [x] Журнал запросов: `request_logs` и `request_attempts`
 - [x] Сохранение состояния ключей (cooldown, last_used_at) в БД
-- [ ] Streaming в адаптере (SSE)
+- [x] Streaming (SSE): адаптер, Router и HTTP-слой
 - [ ] Circuit breaker
-- [ ] SSE streaming
 - [ ] Расчёт стоимости запросов
 - [ ] Demo/admin-консоль

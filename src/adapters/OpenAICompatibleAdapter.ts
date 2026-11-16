@@ -6,6 +6,7 @@ import { GatewayError } from '../core/errors.js';
 import type {
   ChatOptions,
   ChatStreamChunk,
+  ChatUsage,
   FinishReason,
   LLMProviderAdapter,
   ProviderChatRequest,
@@ -45,6 +46,28 @@ const openAIResponseSchema = z.object({
     .optional(),
 });
 
+const openAIStreamChunkSchema = z.object({
+  choices: z
+    .array(
+      z.object({
+        delta: z
+          .object({
+            content: z.string().nullable().optional(),
+          })
+          .optional(),
+        finish_reason: z.string().nullable().optional(),
+      }),
+    )
+    .optional(),
+  usage: z
+    .object({
+      prompt_tokens: z.number().int().nonnegative().optional(),
+      completion_tokens: z.number().int().nonnegative().optional(),
+      total_tokens: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
+});
+
 /**
  * Адаптер для провайдеров с OpenAI-совместимым API:
  * OpenRouter, OpenAI, Groq, Ollama (OpenAI-compatible endpoint).
@@ -73,24 +96,7 @@ export class OpenAICompatibleAdapter implements LLMProviderAdapter {
       ? AbortSignal.any([options.signal, timeoutSignal])
       : timeoutSignal;
 
-    const body: Record<string, unknown> = {
-      model: request.upstreamModel,
-      messages: request.messages,
-      stream: false,
-    };
-
-    if (request.temperature !== undefined) {
-      body.temperature = request.temperature;
-    }
-    if (request.maxTokens !== undefined) {
-      body.max_tokens = request.maxTokens;
-    }
-    if (request.topP !== undefined) {
-      body.top_p = request.topP;
-    }
-    if (request.stop !== undefined) {
-      body.stop = request.stop;
-    }
+    const body = buildRequestBody(request, false);
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -164,14 +170,309 @@ export class OpenAICompatibleAdapter implements LLMProviderAdapter {
   }
 
   async *chatStream(
-    _request: ProviderChatRequest,
-    _options: ChatOptions,
+    request: ProviderChatRequest,
+    options: ChatOptions,
   ): AsyncIterable<ChatStreamChunk> {
+    const timeoutSignal = AbortSignal.timeout(options.timeoutMs);
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, timeoutSignal])
+      : timeoutSignal;
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+      ...(options.apiKey ? { Authorization: `Bearer ${options.apiKey}` } : {}),
+      ...options.headers,
+    };
+
+    let response: Response;
+
+    try {
+      response = await this.fetchImpl(
+        `${options.baseUrl.replace(/\/+$/, '')}/chat/completions`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(buildRequestBody(request, true)),
+          signal,
+        },
+      );
+    } catch (error) {
+      throw mapTransportError(error, options, timeoutSignal);
+    }
+
+    if (!response.ok) {
+      const details = await readBodySafely(response);
+      throw mapHttpError(response.status, details);
+    }
+
+    if (response.body === null) {
+      throw new GatewayError({
+        code: 'upstream_error',
+        message: 'Provider returned an empty stream',
+        providerStatus: response.status,
+        retryable: true,
+      });
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finishReason: FinishReason = 'unknown';
+    let usage: ChatUsage | undefined;
+
+    try {
+      outer: while (true) {
+        let result: Awaited<ReturnType<typeof reader.read>>;
+
+        try {
+          result = await reader.read();
+        } catch (error) {
+          throw mapStreamReadError(error, options, timeoutSignal);
+        }
+
+        if (result.done) {
+          break;
+        }
+
+        buffer += decoder.decode(result.value, { stream: true });
+
+        // SSE-события разделяются пустой строкой. Один `read()` может
+        // принести половину события, поэтому разбираем только полные
+        // блоки, а остаток оставляем в буфере до следующего чтения.
+        let separator = /\r?\n\r?\n/.exec(buffer);
+
+        while (separator !== null) {
+          const event = buffer.slice(0, separator.index);
+          buffer = buffer.slice(separator.index + separator[0].length);
+
+          const parsed = parseStreamEvent(event, response.status);
+
+          if (parsed.done) {
+            break outer;
+          }
+
+          if (parsed.delta !== undefined) {
+            yield { type: 'delta', content: parsed.delta };
+          }
+          if (parsed.finishReason !== undefined) {
+            finishReason = parsed.finishReason;
+          }
+          if (parsed.usage !== undefined) {
+            usage = parsed.usage;
+          }
+
+          separator = /\r?\n\r?\n/.exec(buffer);
+        }
+      }
+
+      // Провайдер мог закрыть поток без завершающей пустой строки.
+      buffer += decoder.decode();
+
+      if (buffer.trim().length > 0) {
+        const parsed = parseStreamEvent(buffer, response.status);
+
+        if (!parsed.done) {
+          if (parsed.delta !== undefined) {
+            yield { type: 'delta', content: parsed.delta };
+          }
+          if (parsed.finishReason !== undefined) {
+            finishReason = parsed.finishReason;
+          }
+          if (parsed.usage !== undefined) {
+            usage = parsed.usage;
+          }
+        }
+      }
+    } finally {
+      // Если потребитель перестал читать (например, клиент закрыл
+      // соединение), отменяем upstream-запрос и освобождаем reader.
+      try {
+        await reader.cancel();
+      } catch {
+        // Отмена уже завершённого потока не является ошибкой.
+      }
+
+      reader.releaseLock();
+    }
+
+    yield {
+      type: 'done',
+      finishReason,
+      ...(usage !== undefined ? { usage } : {}),
+    };
+  }
+}
+
+interface ParsedStreamEvent {
+  delta?: string;
+  finishReason?: FinishReason;
+  usage?: ChatUsage;
+  done: boolean;
+}
+
+/**
+ * Разбирает один SSE-блок от OpenAI-совместимого провайдера.
+ *
+ * OpenAI присылает JSON в строке `data:`. Строки-комментарии (`: ping`)
+ * и прочие поля SSE нас не интересуют. Несколько `data:`-строк
+ * склеиваются через перевод строки, как требует спецификация SSE.
+ */
+function parseStreamEvent(
+  event: string,
+  providerStatus: number,
+): ParsedStreamEvent {
+  const dataLines: string[] = [];
+
+  for (const line of event.split(/\r?\n/)) {
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).trimStart());
+    }
+  }
+
+  if (dataLines.length === 0) {
+    return { done: false };
+  }
+
+  const data = dataLines.join('\n').trim();
+
+  if (data === '') {
+    return { done: false };
+  }
+
+  if (data === '[DONE]') {
+    return { done: true };
+  }
+
+  let payload: unknown;
+
+  try {
+    payload = JSON.parse(data);
+  } catch (error) {
     throw new GatewayError({
-      code: 'internal_error',
-      message: 'Streaming is not implemented yet',
+      code: 'upstream_error',
+      message: 'Provider returned invalid stream data',
+      providerStatus,
+      retryable: true,
+      cause: error,
     });
   }
+
+  const parsed = openAIStreamChunkSchema.safeParse(payload);
+
+  if (!parsed.success) {
+    throw new GatewayError({
+      code: 'upstream_error',
+      message: 'Provider returned an unexpected stream chunk',
+      providerStatus,
+      details: parsed.error.issues,
+      retryable: true,
+    });
+  }
+
+  const result: ParsedStreamEvent = { done: false };
+  const choice = parsed.data.choices?.[0];
+
+  if (choice !== undefined) {
+    const content = choice.delta?.content;
+
+    if (typeof content === 'string' && content.length > 0) {
+      result.delta = content;
+    }
+
+    if (
+      choice.finish_reason !== null &&
+      choice.finish_reason !== undefined
+    ) {
+      result.finishReason = mapFinishReason(choice.finish_reason);
+    }
+  }
+
+  if (parsed.data.usage !== undefined) {
+    result.usage = toChatUsage(parsed.data.usage);
+  }
+
+  return result;
+}
+
+function buildRequestBody(
+  request: ProviderChatRequest,
+  stream: boolean,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    model: request.upstreamModel,
+    messages: request.messages,
+    stream,
+  };
+
+  if (request.temperature !== undefined) {
+    body.temperature = request.temperature;
+  }
+  if (request.maxTokens !== undefined) {
+    body.max_tokens = request.maxTokens;
+  }
+  if (request.topP !== undefined) {
+    body.top_p = request.topP;
+  }
+  if (request.stop !== undefined) {
+    body.stop = request.stop;
+  }
+
+  if (stream) {
+    // Просим провайдера прислать usage отдельным финальным чанком.
+    // Без этого в streaming-режиме токены часто неизвестны.
+    body.stream_options = { include_usage: true };
+  }
+
+  return body;
+}
+
+function toChatUsage(usage: {
+  prompt_tokens?: number | undefined;
+  completion_tokens?: number | undefined;
+  total_tokens?: number | undefined;
+}): ChatUsage {
+  const promptTokens = usage.prompt_tokens ?? 0;
+  const completionTokens = usage.completion_tokens ?? 0;
+
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens: usage.total_tokens ?? promptTokens + completionTokens,
+  };
+}
+
+function mapStreamReadError(
+  error: unknown,
+  options: ChatOptions,
+  timeoutSignal: AbortSignal,
+): GatewayError {
+  if (options.signal?.aborted) {
+    return new GatewayError({
+      code: 'client_disconnected',
+      message: 'Client aborted the stream',
+      cause: error,
+    });
+  }
+
+  if (
+    timeoutSignal.aborted ||
+    (error instanceof Error && error.name === 'TimeoutError')
+  ) {
+    return new GatewayError({
+      code: 'provider_timeout',
+      message: `Provider stream did not finish within ${options.timeoutMs} ms`,
+      retryable: true,
+      cause: error,
+    });
+  }
+
+  return new GatewayError({
+    code: 'upstream_error',
+    message: 'Provider stream failed',
+    retryable: true,
+    cause: error,
+  });
 }
 
 async function readJson(response: Response): Promise<unknown> {

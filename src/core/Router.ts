@@ -7,6 +7,7 @@ import type {
   ChatOptions,
   ChatRequest,
   ChatResponse,
+  ChatStreamChunk,
   CompletionParams,
   LLMProviderAdapter,
   ProviderChatRequest,
@@ -280,6 +281,163 @@ export class Router {
     });
   }
 
+  async *chatStream(
+    request: ChatRequest,
+    options: RouterChatOptions = {},
+  ): AsyncIterable<ChatStreamChunk> {
+    const resolved = await this.resolveDeploymentsSafely(request.model);
+    const deployments = [...resolved].sort(
+      (left, right) => left.priority - right.priority,
+    );
+
+    if (deployments.length === 0) {
+      throw new GatewayError({
+        code: 'no_route',
+        message: `No route configured for model "${request.model}"`,
+      });
+    }
+
+    const completion = buildCompletionParams(request);
+    let attempts = 0;
+    let lastError: GatewayError | undefined;
+
+    for (const deployment of deployments) {
+      const attemptedKeys = new Set<string>();
+
+      while (attempts < this.maxAttempts) {
+        const key = deployment.keyPool.acquire();
+
+        if (key === null || attemptedKeys.has(key.id)) {
+          break;
+        }
+
+        attemptedKeys.add(key.id);
+        attempts += 1;
+
+        const providerRequest: ProviderChatRequest = {
+          ...completion,
+          upstreamModel: deployment.upstreamModel,
+        };
+        const attemptStartedAt = performance.now();
+        const iterator = deployment.adapter
+          .chatStream(
+            providerRequest,
+            buildChatOptions(deployment, key.value, options),
+          )
+          [Symbol.asyncIterator]();
+
+        let first: IteratorResult<ChatStreamChunk>;
+
+        try {
+          // Ждём первый чанк до отправки HTTP-заголовков клиенту.
+          // Пока чанка нет, ошибку ещё можно скрыть fallback'ом.
+          first = await iterator.next();
+        } catch (error) {
+          await closeIterator(iterator);
+
+          const gatewayError = toGatewayError(error);
+          lastError = gatewayError;
+
+          reportAttempt(options.onAttempt, {
+            attemptNo: attempts,
+            providerId: deployment.providerId,
+            apiKeyId: key.id,
+            upstreamModel: deployment.upstreamModel,
+            status:
+              gatewayError.code === 'provider_timeout' ? 'timeout' : 'error',
+            ...(gatewayError.providerStatus !== undefined
+              ? { httpStatus: gatewayError.providerStatus }
+              : {}),
+            errorCode: gatewayError.code,
+            latencyMs: Math.round(performance.now() - attemptStartedAt),
+          });
+
+          this.reportKeyFailure(
+            deployment.keyPool,
+            key.id,
+            gatewayError,
+            Date.now(),
+          );
+
+          if (TERMINAL_ERRORS.has(gatewayError.code)) {
+            throw gatewayError;
+          }
+
+          if (KEY_SPECIFIC_ERRORS.has(gatewayError.code)) {
+            continue;
+          }
+
+          break;
+        }
+
+        const succeededAt = Date.now();
+
+        deployment.keyPool.reportSuccess(key.id, succeededAt);
+
+        reportKeyState(this.onKeyState, {
+          keyId: key.id,
+          type: 'success',
+          at: succeededAt,
+        });
+
+        reportAttempt(options.onAttempt, {
+          attemptNo: attempts,
+          providerId: deployment.providerId,
+          apiKeyId: key.id,
+          upstreamModel: deployment.upstreamModel,
+          status: 'success',
+          httpStatus: 200,
+          latencyMs: Math.round(performance.now() - attemptStartedAt),
+        });
+
+        try {
+          if (!first.done) {
+            yield first.value;
+          }
+
+          while (true) {
+            const next = await iterator.next();
+
+            if (next.done) {
+              break;
+            }
+
+            yield next.value;
+          }
+        } finally {
+          await closeIterator(iterator);
+        }
+
+        // После первого чанка fallback уже невозможен: заголовки
+        // и часть тела ответа могли уйти клиенту.
+        return;
+      }
+    }
+
+    if (lastError !== undefined) {
+      throw new GatewayError({
+        code: 'all_providers_failed',
+        message:
+          `All ${attempts} attempt(s) failed for model "${request.model}"`,
+        details: {
+          attempts,
+          lastErrorCode: lastError.code,
+          lastErrorMessage: lastError.message,
+        },
+        cause: lastError,
+      });
+    }
+
+    throw new GatewayError({
+      code: 'all_providers_failed',
+      message: `No API keys available for model "${request.model}"`,
+      details: {
+        attempts,
+        deployments: deployments.length,
+      },
+    });
+  }
+
   private async resolveDeploymentsSafely(
     alias: string,
   ): Promise<ReadonlyArray<RouterDeployment>> {
@@ -362,6 +520,27 @@ function reportKeyState(
     observer(event);
   } catch {
     // Сохранение состояния ключа — вспомогательная операция.
+  }
+}
+
+/**
+ * Аккуратно закрывает итератор адаптера.
+ *
+ * Это важно для streaming: если клиент отключился или Router выбрал
+ * другой deployment, upstream-запрос нужно отменить, а не оставить
+ * висеть до таймаута.
+ */
+async function closeIterator(
+  iterator: AsyncIterator<ChatStreamChunk>,
+): Promise<void> {
+  if (typeof iterator.return !== 'function') {
+    return;
+  }
+
+  try {
+    await iterator.return();
+  } catch {
+    // Закрытие итератора — вспомогательная операция.
   }
 }
 
