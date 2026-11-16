@@ -113,6 +113,7 @@ export interface ChatCompletionResponse {
   };
   provider: string;
   latency_ms: number;
+  cost_micros: number;
 }
 
 export interface ChatCompletionErrorResponse {
@@ -280,7 +281,7 @@ export function registerChatCompletionRoute(
         promptTokens: response.usage.promptTokens,
         completionTokens: response.usage.completionTokens,
         totalTokens: response.usage.totalTokens,
-        costMicros: 0,
+        costMicros: response.costMicros,
         latencyMs: Math.round(performance.now() - startedAt),
         ttftMs: response.ttftMs ?? null,
         status: 'success',
@@ -343,6 +344,7 @@ interface StreamingCompletionParams {
 interface StreamingLogResult {
   ttftMs: number | null;
   usage: ChatUsage | undefined;
+  costMicros: number;
   status: RequestLogRecord['status'];
   errorCode: GatewayErrorCode | null;
 }
@@ -407,6 +409,7 @@ async function handleStreamingCompletion(
     await persistStreamLog(params, {
       ttftMs: null,
       usage: undefined,
+      costMicros: 0,
       status: requestStatusFromError(gatewayError, params.attempts),
       errorCode: gatewayError.code,
     });
@@ -455,6 +458,7 @@ async function handleStreamingCompletion(
 
   let finishReason: FinishReason = 'unknown';
   let usage: ChatUsage | undefined;
+  let costMicros = 0;
 
   try {
     await writeSse(
@@ -478,6 +482,7 @@ async function handleStreamingCompletion(
         }
       } else {
         finishReason = chunk.finishReason;
+        costMicros = chunk.costMicros ?? 0;
 
         if (chunk.usage !== undefined) {
           usage = chunk.usage;
@@ -490,7 +495,14 @@ async function handleStreamingCompletion(
     await writeSse(
       reply.raw,
       formatSseData(
-        finalChunk(id, created, params.body.model, finishReason, usage),
+        finalChunk(
+          id,
+          created,
+          params.body.model,
+          finishReason,
+          usage,
+          costMicros,
+        ),
       ),
     );
     await writeSse(reply.raw, SSE_DONE);
@@ -502,6 +514,7 @@ async function handleStreamingCompletion(
     await persistStreamLog(params, {
       ttftMs,
       usage,
+      costMicros,
       status: 'success',
       errorCode: null,
     });
@@ -530,6 +543,7 @@ async function handleStreamingCompletion(
     await persistStreamLog(params, {
       ttftMs,
       usage,
+      costMicros,
       status: requestStatusFromError(gatewayError, params.attempts),
       errorCode: gatewayError.code,
     });
@@ -565,7 +579,7 @@ async function persistStreamLog(
     promptTokens: result.usage?.promptTokens ?? 0,
     completionTokens: result.usage?.completionTokens ?? 0,
     totalTokens: result.usage?.totalTokens ?? 0,
-    costMicros: 0,
+    costMicros: result.costMicros,
     latencyMs: Math.round(performance.now() - params.startedAt),
     ttftMs: result.ttftMs,
     status: result.status,
@@ -593,6 +607,7 @@ interface ChatCompletionChunk {
     completion_tokens: number;
     total_tokens: number;
   };
+  cost_micros?: number;
 }
 
 function roleChunk(
@@ -642,6 +657,7 @@ function finalChunk(
   model: string,
   finishReason: FinishReason,
   usage: ChatUsage | undefined,
+  costMicros: number,
 ): ChatCompletionChunk {
   return {
     id,
@@ -655,6 +671,7 @@ function finalChunk(
         finish_reason: finishReason,
       },
     ],
+    cost_micros: costMicros,
     ...(usage !== undefined
       ? {
           usage: {
@@ -773,6 +790,7 @@ export function toChatCompletionResponse(
     },
     provider: response.provider,
     latency_ms: response.latencyMs,
+    cost_micros: response.costMicros,
   };
 }
 

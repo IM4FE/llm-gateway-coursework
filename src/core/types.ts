@@ -76,6 +76,11 @@ export interface ProviderChatResponse {
  */
 export interface ChatResponse extends ProviderChatResponse {
   requestedModel: string;
+  /**
+   * Стоимость запроса в микро-долларах.
+   * 1 USD = 1_000_000 микро-долларов.
+   */
+  costMicros: number;
 }
 
 export type ChatStreamChunk =
@@ -87,6 +92,11 @@ export type ChatStreamChunk =
       type: 'done';
       finishReason: FinishReason;
       usage?: ChatUsage;
+      /**
+       * Стоимость запроса. Заполняется Router'ом, который знает
+       * выбранный deployment и его цены.
+       */
+      costMicros?: number;
     };
 
 export interface ChatOptions {

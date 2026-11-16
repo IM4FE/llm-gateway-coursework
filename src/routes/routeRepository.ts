@@ -19,6 +19,8 @@ export interface RouteRow {
   providerType: ProviderType;
   baseUrl: string;
   timeoutMs: number;
+  inputPriceMicrosPer1m: number;
+  outputPriceMicrosPer1m: number;
 }
 
 export type RouteRowLoader = (alias: string) => Promise<RouteRow[]>;
@@ -66,6 +68,8 @@ export function createRouteRepository(db: Database): RouteRepository {
         providerType: providers.type,
         baseUrl: providers.baseUrl,
         timeoutMs: providers.timeoutMs,
+        inputPriceMicrosPer1m: models.inputPriceMicrosPer1m,
+        outputPriceMicrosPer1m: models.outputPriceMicrosPer1m,
       })
       .from(modelRoutes)
       .innerJoin(models, eq(modelRoutes.modelId, models.id))

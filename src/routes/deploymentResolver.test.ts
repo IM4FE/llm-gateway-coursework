@@ -24,6 +24,8 @@ function routeRow(overrides: Partial<RouteRow> = {}): RouteRow {
     providerType: 'openai_compatible',
     baseUrl: 'https://openrouter.ai/api/v1',
     timeoutMs: 30_000,
+    inputPriceMicrosPer1m: 0,
+    outputPriceMicrosPer1m: 0,
     ...overrides,
   };
 }
@@ -52,7 +54,10 @@ function makePools(pool: KeyPool) {
 
 describe('createDeploymentResolver', () => {
   it('maps route rows to router deployments', async () => {
-    const row = routeRow();
+    const row = routeRow({
+      inputPriceMicrosPer1m: 150_000,
+      outputPriceMicrosPer1m: 600_000,
+    });
     const adapter = new OpenAICompatibleAdapter('OpenRouter');
     const createAdapter = vi.fn<AdapterFactory>().mockReturnValue(adapter);
     const pool = makePool('a');
@@ -74,6 +79,8 @@ describe('createDeploymentResolver', () => {
       priority: 1,
       baseUrl: 'https://openrouter.ai/api/v1',
       timeoutMs: 30_000,
+      inputPriceMicrosPer1m: 150_000,
+      outputPriceMicrosPer1m: 600_000,
     });
     expect(deployments[0]!.adapter).toBe(adapter);
     expect(deployments[0]!.keyPool).toBe(pool);

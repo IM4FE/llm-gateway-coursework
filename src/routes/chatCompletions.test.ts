@@ -190,6 +190,7 @@ function chatResponse(): ChatResponse {
     },
     latencyMs: 42,
     requestedModel: 'fast-model',
+    costMicros: 0,
   };
 }
 
@@ -269,6 +270,23 @@ describe('POST /v1/chat/completions', () => {
       topP: 0.9,
       stop: ['\n'],
     });
+  });
+
+  it('exposes cost_micros from the router response', async () => {
+    const router = new FakeRouter({ ...chatResponse(), costMicros: 123_456 });
+    const server = createApp(router);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'fast-model',
+        messages: [{ role: 'user', content: 'Привет!' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ cost_micros: 123_456 });
   });
 
   it.each([
@@ -689,6 +707,35 @@ describe('request logging on POST /v1/chat/completions', () => {
     ]);
   });
 
+  it('stores cost_micros for a successful request', async () => {
+    const writer = vi.fn<RequestLogWriter>().mockResolvedValue(undefined);
+    const router = new FakeRouter(
+      { ...chatResponse(), costMicros: 42 },
+      [successAttempt()],
+    );
+    const server = createApp(
+      router,
+      allowAllClients,
+      allowAllLimiter,
+      new RequestLogRepository(writer),
+    );
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'fast-model',
+        messages: [{ role: 'user', content: 'Привет!' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(writer.mock.calls[0]![0]).toMatchObject({
+      status: 'success',
+      costMicros: 42,
+    });
+  });
+
   it('stores a failed request with the upstream error', async () => {
     const writer = vi.fn<RequestLogWriter>().mockResolvedValue(undefined);
     const router = new FakeRouter(
@@ -938,6 +985,57 @@ describe('streaming on POST /v1/chat/completions', () => {
     });
     expect(record.ttftMs).toEqual(expect.any(Number));
     expect(record.latencyMs).toEqual(expect.any(Number));
+  });
+
+  it('exposes cost_micros in the final chunk and stores it', async () => {
+    const writer = vi.fn<RequestLogWriter>().mockResolvedValue(undefined);
+    const router = new FakeStreamingRouter(
+      [
+        delta('ok'),
+        {
+          type: 'done',
+          finishReason: 'stop',
+          usage: {
+            promptTokens: 3,
+            completionTokens: 2,
+            totalTokens: 5,
+          },
+          costMicros: 777,
+        },
+      ],
+      [successAttempt()],
+    );
+    const server = createApp(
+      router,
+      allowAllClients,
+      allowAllLimiter,
+      new RequestLogRepository(writer),
+    );
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'fast-model',
+        messages: [{ role: 'user', content: 'Привет!' }],
+        stream: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+
+    const chunks = parseSse(response.payload)
+      .filter((event) => event.data !== '[DONE]')
+      .map((event) => JSON.parse(event.data) as Record<string, unknown>);
+
+    expect(chunks.at(-1)).toMatchObject({
+      choices: [{ delta: {}, finish_reason: 'stop' }],
+      cost_micros: 777,
+    });
+    expect(writer.mock.calls[0]![0]).toMatchObject({
+      status: 'success',
+      costMicros: 777,
+    });
   });
 
   it('returns a JSON error when the stream fails before the first chunk', async () => {

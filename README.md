@@ -180,7 +180,7 @@ X-RateLimit-Reset: 1800000000
 Каждый запрос, дошедший до Router, сохраняется в две таблицы:
 
 - `request_logs` — итог запроса: клиент, alias, фактическая модель,
-  провайдер, ключ, токены, latency, статус и код ошибки;
+  провайдер, ключ, токены, стоимость, latency, статус и код ошибки;
 - `request_attempts` — каждая фактическая попытка Router'а: провайдер,
   ключ, HTTP-статус, ошибка и latency.
 
@@ -198,7 +198,7 @@ X-Request-Id: 6f1c2a7e-0f6b-4a9c-9d7e-3b5a1c8e2d40
 
 ```sh
 docker compose exec postgres psql -U gateway -d llm_gateway -c \
-  "select request_id, requested_model, actual_model, status, error_code, latency_ms from request_logs order by created_at desc limit 5;"
+  "select request_id, requested_model, actual_model, status, error_code, cost_micros, latency_ms from request_logs order by created_at desc limit 5;"
 ```
 
 И попытки этого запроса:
@@ -228,12 +228,111 @@ curl.exe -i -sS -X POST http://localhost:3000/v1/chat/completions `
 
 Важные детали:
 
-- `cost_micros` пока всегда `0`: расчёт стоимости появится отдельным шагом;
+- `cost_micros` считается по ценам модели из `models` — см. раздел
+  «Стоимость запросов» ниже;
 - запросы, отклонённые до Router (`401`, `429`, `400`), в журнал не пишутся —
   они видны в логах приложения;
 - запись журнала best-effort: если БД недоступна, клиент всё равно получит
   ответ провайдера, а ошибка сохранения попадёт в лог приложения;
 - `X-Request-Id` возвращается на всех ответах, включая ошибки.
+
+### Стоимость запросов
+
+Цены хранятся в таблице `models` в микро-долларах за 1M токенов:
+
+- `input_price_micros_per_1m` — входные токены (prompt);
+- `output_price_micros_per_1m` — выходные токены (completion).
+
+1 USD = 1 000 000 микро-долларов. Например, цена `$0.15 / 1M` — это
+`150000` микро-долларов.
+
+Формула:
+
+```text
+cost_micros = round(
+  (prompt_tokens * input_price_micros_per_1m
+   + completion_tokens * output_price_micros_per_1m) / 1_000_000
+)
+```
+
+Результат округляется до ближайшего целого микро-доллара (`Math.round`).
+Для учебного проекта этого достаточно; строгий биллинг обычно использует
+`ceil` или более высокую точность.
+
+Router считает стоимость после ответа адаптера: именно он знает, какой
+deployment сработал и какие цены у выбранной модели. В streaming стоимость
+добавляется в финальный чанк, потому что `usage` приходит только в нём.
+
+Стоимость видна в трёх местах:
+
+- в JSON-ответе — поле `cost_micros`;
+- в последнем SSE-чанке — поле `cost_micros`;
+- в `request_logs.cost_micros`.
+
+Пример JSON-ответа:
+
+```json
+{
+  "id": "chatcmpl-6f1c2a7e",
+  "object": "chat.completion",
+  "created": 1800000000,
+  "model": "fast-model",
+  "choices": [
+    {
+      "index": 0,
+      "message": { "role": "assistant", "content": "Hello!" },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 10,
+    "completion_tokens": 2,
+    "total_tokens": 12
+  },
+  "provider": "OpenRouter",
+  "latency_ms": 842,
+  "cost_micros": 3
+}
+```
+
+Посмотреть стоимость последних запросов:
+
+```sh
+docker compose exec postgres psql -U gateway -d llm_gateway -c \
+  "select request_id, requested_model, actual_model, prompt_tokens, completion_tokens, cost_micros, status from request_logs order by created_at desc limit 5;"
+```
+
+Проверить цены моделей:
+
+```sh
+docker compose exec postgres psql -U gateway -d llm_gateway -c \
+  "select upstream_model, input_price_micros_per_1m, output_price_micros_per_1m from models;"
+```
+
+У бесплатной модели цены равны `0`, поэтому `cost_micros` тоже будет `0`.
+Чтобы увидеть ненулевое значение, задайте цены вручную:
+
+```sh
+docker compose exec postgres psql -U gateway -d llm_gateway -c \
+  "update models set input_price_micros_per_1m = 150000, output_price_micros_per_1m = 600000 where upstream_model = 'nvidia/nemotron-3.5-lightning:free';"
+```
+
+Цены читаются из БД при каждом запросе, перезапуск шлюза не нужен.
+Не забудьте вернуть `0`, если хотите снова видеть бесплатные запросы:
+
+```sh
+docker compose exec postgres psql -U gateway -d llm_gateway -c \
+  "update models set input_price_micros_per_1m = 0, output_price_micros_per_1m = 0 where upstream_model = 'nvidia/nemotron-3.5-lightning:free';"
+```
+
+Проверить `cost_micros` в ответе:
+
+```sh
+curl -sS http://localhost:3000/v1/chat/completions \
+  -H "Authorization: Bearer $CLIENT_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"fast-model","messages":[{"role":"user","content":"Hello!"}]}'
+```
 
 ### Streaming (SSE)
 
@@ -255,7 +354,7 @@ data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":...,"model
 
 data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":...,"model":"fast-model","choices":[{"index":0,"delta":{"content":"При"},"finish_reason":null}]}
 
-data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":...,"model":"fast-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":...,"model":"fast-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5},"cost_micros":1}
 
 data: [DONE]
 
@@ -281,7 +380,8 @@ data: [DONE]
 4. Если клиент закрыл соединение, upstream-запрос отменяется через
    `AbortController`, а запись в журнале получает статус `cancelled`.
 5. В `request_logs` пишутся `is_stream = true`, `ttft_ms` (время до первого
-   токена), `latency_ms`, `usage`, `status` и все попытки Router'а.
+   токена), `latency_ms`, `usage`, `cost_micros`, `status` и все попытки
+   Router'а.
 
 #### curl (bash / macOS / Linux)
 
@@ -307,7 +407,7 @@ curl.exe -N -sS -X POST http://localhost:3000/v1/chat/completions `
 
 ```sh
 docker compose exec postgres psql -U gateway -d llm_gateway -c \
-  "select request_id, status, is_stream, ttft_ms, latency_ms, total_tokens from request_logs order by created_at desc limit 5;"
+  "select request_id, status, is_stream, ttft_ms, latency_ms, total_tokens, cost_micros from request_logs order by created_at desc limit 5;"
 ```
 
 Ограничения текущей реализации:
@@ -467,6 +567,6 @@ deepseek/deepseek-r1:free
 - [x] Журнал запросов: `request_logs` и `request_attempts`
 - [x] Сохранение состояния ключей (cooldown, last_used_at) в БД
 - [x] Streaming (SSE): адаптер, Router и HTTP-слой
+- [x] Расчёт стоимости запросов (`cost_micros`)
 - [ ] Circuit breaker
-- [ ] Расчёт стоимости запросов
 - [ ] Demo/admin-консоль

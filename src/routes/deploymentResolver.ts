@@ -46,6 +46,8 @@ export function createDeploymentResolver(
           keyPool: await options.pools.get(row.providerId),
           baseUrl: row.baseUrl,
           timeoutMs: row.timeoutMs,
+          inputPriceMicrosPer1m: row.inputPriceMicrosPer1m,
+          outputPriceMicrosPer1m: row.outputPriceMicrosPer1m,
           ...(headers !== undefined ? { headers } : {}),
         };
       }),

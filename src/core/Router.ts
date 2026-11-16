@@ -1,5 +1,6 @@
 import { performance } from 'node:perf_hooks';
 
+import { calculateCostMicros } from './cost.js';
 import { GatewayError, toGatewayError } from './errors.js';
 import type { KeyStateEvent, KeyStateObserver } from './keyState.js';
 import type { KeyPool } from './KeyPool.js';
@@ -28,6 +29,12 @@ export interface RouterDeployment {
   baseUrl: string;
   timeoutMs: number;
   headers?: Record<string, string>;
+  /**
+   * Цены модели за 1M токенов в микро-долларах.
+   * Нужны Router'у, чтобы посчитать стоимость ответа.
+   */
+  inputPriceMicrosPer1m: number;
+  outputPriceMicrosPer1m: number;
 }
 
 export type DeploymentResolver = (
@@ -214,6 +221,14 @@ export class Router {
           return {
             ...response,
             requestedModel: request.model,
+            costMicros: calculateCostMicros({
+              promptTokens: response.usage.promptTokens,
+              completionTokens: response.usage.completionTokens,
+              inputPriceMicrosPer1m:
+                deployment.inputPriceMicrosPer1m,
+              outputPriceMicrosPer1m:
+                deployment.outputPriceMicrosPer1m,
+            }),
           };
         } catch (error) {
           const gatewayError = toGatewayError(error);
@@ -392,7 +407,7 @@ export class Router {
 
         try {
           if (!first.done) {
-            yield first.value;
+            yield withDeploymentCost(first.value, deployment);
           }
 
           while (true) {
@@ -402,7 +417,7 @@ export class Router {
               break;
             }
 
-            yield next.value;
+            yield withDeploymentCost(next.value, deployment);
           }
         } finally {
           await closeIterator(iterator);
@@ -542,6 +557,32 @@ async function closeIterator(
   } catch {
     // Закрытие итератора — вспомогательная операция.
   }
+}
+
+/**
+ * Добавляет стоимость к финальному чанку потока.
+ *
+ * Адаптер не знает цен: он видит только usage. Router знает,
+ * какой deployment сработал, поэтому именно здесь появляется
+ * `costMicros`.
+ */
+function withDeploymentCost(
+  chunk: ChatStreamChunk,
+  deployment: RouterDeployment,
+): ChatStreamChunk {
+  if (chunk.type !== 'done') {
+    return chunk;
+  }
+
+  return {
+    ...chunk,
+    costMicros: calculateCostMicros({
+      promptTokens: chunk.usage?.promptTokens ?? 0,
+      completionTokens: chunk.usage?.completionTokens ?? 0,
+      inputPriceMicrosPer1m: deployment.inputPriceMicrosPer1m,
+      outputPriceMicrosPer1m: deployment.outputPriceMicrosPer1m,
+    }),
+  };
 }
 
 function buildCompletionParams(request: ChatRequest): CompletionParams {

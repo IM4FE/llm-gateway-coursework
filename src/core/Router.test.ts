@@ -186,6 +186,8 @@ function makeDeployment(params: {
   baseUrl?: string;
   timeoutMs?: number;
   headers?: Record<string, string>;
+  inputPriceMicrosPer1m?: number;
+  outputPriceMicrosPer1m?: number;
 }): RouterDeployment {
   return {
     providerId: params.providerId ?? 'provider-1',
@@ -195,6 +197,8 @@ function makeDeployment(params: {
     keyPool: params.keyPool,
     baseUrl: params.baseUrl ?? 'https://example.test/v1',
     timeoutMs: params.timeoutMs ?? 1_000,
+    inputPriceMicrosPer1m: params.inputPriceMicrosPer1m ?? 0,
+    outputPriceMicrosPer1m: params.outputPriceMicrosPer1m ?? 0,
     ...(params.headers !== undefined ? { headers: params.headers } : {}),
   };
 }
@@ -227,6 +231,23 @@ describe('Router', () => {
       state: 'active',
       failureCount: 0,
     });
+  });
+
+  it('calculates cost from the selected deployment prices', async () => {
+    const adapter = new FakeAdapter('Mock', response());
+    const router = makeRouter([
+      makeDeployment({
+        adapter,
+        keyPool: makePool('a'),
+        inputPriceMicrosPer1m: 1_000_000,
+        outputPriceMicrosPer1m: 1_000_000,
+      }),
+    ]);
+
+    const result = await router.chat(request);
+
+    // response() uses 1 prompt + 1 completion token.
+    expect(result.costMicros).toBe(2);
   });
 
   it('passes completion parameters, headers and the abort signal to the adapter', async () => {
@@ -765,11 +786,16 @@ describe('Router streaming', () => {
     expect(chunks).toEqual([
       delta('При'),
       delta('вет'),
-      done('stop', {
-        promptTokens: 3,
-        completionTokens: 2,
-        totalTokens: 5,
-      }),
+      {
+        type: 'done',
+        finishReason: 'stop',
+        usage: {
+          promptTokens: 3,
+          completionTokens: 2,
+          totalTokens: 5,
+        },
+        costMicros: 0,
+      },
     ]);
     expect(attempts).toHaveLength(1);
     expect(attempts[0]).toMatchObject({
@@ -785,6 +811,40 @@ describe('Router streaming', () => {
       type: 'success',
     });
     expect(keyPool.snapshot().keys[0]?.usageCount).toBe(1);
+  });
+
+  it('adds the calculated cost to the final streaming chunk', async () => {
+    const adapter = new FakeStreamingAdapter('Mock', [
+      delta('ok'),
+      done('stop', {
+        promptTokens: 2_000_000,
+        completionTokens: 1_000_000,
+        totalTokens: 3_000_000,
+      }),
+    ]);
+    const router = makeRouter([
+      makeDeployment({
+        adapter,
+        keyPool: makePool('a'),
+        inputPriceMicrosPer1m: 250,
+        outputPriceMicrosPer1m: 500,
+      }),
+    ]);
+
+    const chunks = await collectChunks(
+      router.chatStream({ ...request, stream: true }),
+    );
+
+    expect(chunks.at(-1)).toEqual({
+      type: 'done',
+      finishReason: 'stop',
+      usage: {
+        promptTokens: 2_000_000,
+        completionTokens: 1_000_000,
+        totalTokens: 3_000_000,
+      },
+      costMicros: 1_000,
+    });
   });
 
   it('falls back to the next key before the first chunk', async () => {
@@ -819,7 +879,10 @@ describe('Router streaming', () => {
       ),
     );
 
-    expect(chunks).toEqual([delta('ok'), done('stop')]);
+    expect(chunks).toEqual([
+      delta('ok'),
+      { type: 'done', finishReason: 'stop', costMicros: 0 },
+    ]);
     expect(first.streamCalls).toHaveLength(1);
     expect(second.streamCalls).toHaveLength(1);
     expect(attempts.map((attempt) => attempt.status)).toEqual([

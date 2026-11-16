@@ -17,6 +17,8 @@ const row: RouteRow = {
   providerType: 'openai_compatible',
   baseUrl: 'https://openrouter.ai/api/v1',
   timeoutMs: 30_000,
+  inputPriceMicrosPer1m: 0,
+  outputPriceMicrosPer1m: 0,
 };
 
 describe('RouteRepository', () => {
