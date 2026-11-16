@@ -1,9 +1,14 @@
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, {
+  type FastifyBaseLogger,
+  type FastifyInstance,
+} from 'fastify';
+import type { Logger } from 'pino';
 
 import type { ClientAuthenticator } from './auth/clientAuth.js';
 import type { Env } from './config/env.js';
 import type { RateLimiter } from './core/RateLimiter.js';
 import type { RequestLogRepository } from './db/requestLogRepository.js';
+import { createLogger } from './logger.js';
 import {
   registerChatCompletionRoute,
   type ChatCompletionHandler,
@@ -14,25 +19,17 @@ export interface AppDependencies {
   authenticateClient?: ClientAuthenticator;
   rateLimiter?: RateLimiter;
   requestLogs?: RequestLogRepository;
+  logger?: Logger;
 }
 
 export function buildApp(
   env: Env,
   dependencies: AppDependencies = {},
 ): FastifyInstance {
-  const app = Fastify({
-    logger: {
-      level: env.LOG_LEVEL,
-      redact: {
-        paths: [
-          'req.headers.authorization',
-          'req.headers["x-api-key"]',
-          'req.headers.cookie',
-        ],
-        censor: '[redacted]',
-      },
-    },
-  });
+  const loggerInstance: FastifyBaseLogger =
+    dependencies.logger ?? createLogger(env);
+
+  const app = Fastify({ loggerInstance });
 
   app.get('/health', async () => ({ status: 'ok' }));
 

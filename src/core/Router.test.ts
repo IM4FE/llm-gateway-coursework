@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { GatewayError } from './errors.js';
+import type { KeyStateEvent } from './keyState.js';
 import { KeyPool } from './KeyPool.js';
 import {
   Router,
@@ -568,5 +569,91 @@ describe('Router attempt observer', () => {
         },
       }),
     ).resolves.toMatchObject({ content: 'ok' });
+  });
+});
+
+describe('Router key state observer', () => {
+  it('reports a rate limit and the following success', async () => {
+    const adapter = new FakeAdapter(
+      'Mock',
+      gatewayError('rate_limited'),
+      response('Mock', 'second-key'),
+    );
+    const events: KeyStateEvent[] = [];
+    const router = makeRouter(
+      [makeDeployment({ adapter, keyPool: makePool('a', 'b') })],
+      { onKeyState: (event) => events.push(event) },
+    );
+
+    await router.chat(request);
+
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      keyId: 'a',
+      type: 'rate_limited',
+    });
+    expect(events[0]!.at).toEqual(expect.any(Number));
+    expect(events[0]!.cooldownUntil).toBeGreaterThan(events[0]!.at);
+    expect(events[1]).toMatchObject({
+      keyId: 'b',
+      type: 'success',
+    });
+  });
+
+  it('reports an invalid key after 401/403', async () => {
+    const adapter = new FakeAdapter(
+      'Mock',
+      gatewayError('unauthorized'),
+      response('Mock', 'second-key'),
+    );
+    const events: KeyStateEvent[] = [];
+    const router = makeRouter(
+      [makeDeployment({ adapter, keyPool: makePool('a', 'b') })],
+      { onKeyState: (event) => events.push(event) },
+    );
+
+    await router.chat(request);
+
+    expect(events[0]).toMatchObject({
+      keyId: 'a',
+      type: 'invalid',
+    });
+    expect(events[0]!.cooldownUntil).toBeUndefined();
+  });
+
+  it('reports a generic key failure without cooldown', async () => {
+    const adapter = new FakeAdapter('Mock', gatewayError('upstream_error'));
+    const events: KeyStateEvent[] = [];
+    const router = makeRouter(
+      [makeDeployment({ adapter, keyPool: makePool('a') })],
+      { onKeyState: (event) => events.push(event) },
+    );
+
+    await expect(router.chat(request)).rejects.toMatchObject({
+      code: 'all_providers_failed',
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      keyId: 'a',
+      type: 'failure',
+    });
+    expect(events[0]!.cooldownUntil).toBeUndefined();
+  });
+
+  it('does not fail the request when the key state observer throws', async () => {
+    const adapter = new FakeAdapter('Mock', response());
+    const router = makeRouter(
+      [makeDeployment({ adapter, keyPool: makePool('a') })],
+      {
+        onKeyState: () => {
+          throw new Error('key state observer failed');
+        },
+      },
+    );
+
+    await expect(router.chat(request)).resolves.toMatchObject({
+      content: 'ok',
+    });
   });
 });

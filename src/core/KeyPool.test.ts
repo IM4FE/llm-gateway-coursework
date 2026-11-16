@@ -33,6 +33,49 @@ describe('KeyPool', () => {
     expect(pool.acquire(T0)?.id).toBe('a');
   });
 
+  it('restores persisted cooldown and counters', () => {
+    const pool = new KeyPool(
+      [
+        {
+          ...entry('a'),
+          failureCount: 2,
+          cooldownUntil: T0 + 5_000,
+          lastUsedAt: T0 - 1_000,
+        },
+        entry('b'),
+      ],
+      T0,
+    );
+
+    const snapshot = pool.snapshot(T0);
+
+    expect(snapshot.keys[0]).toMatchObject({
+      id: 'a',
+      state: 'cooldown',
+      failureCount: 2,
+      cooldownUntil: T0 + 5_000,
+      lastUsedAt: T0 - 1_000,
+    });
+    expect(snapshot.available).toBe(1);
+    expect(snapshot.nextAvailableAt).toBe(T0 + 5_000);
+    expect(pool.acquire(T0)?.id).toBe('b');
+    expect(pool.acquire(T0 + 5_000)?.id).toBe('a');
+  });
+
+  it('treats an expired persisted cooldown as active', () => {
+    const pool = new KeyPool(
+      [{ ...entry('a'), failureCount: 3, cooldownUntil: T0 - 1 }],
+      T0,
+    );
+
+    expect(pool.snapshot(T0).keys[0]).toMatchObject({
+      state: 'active',
+      failureCount: 3,
+      cooldownUntil: null,
+    });
+    expect(pool.acquire(T0)?.id).toBe('a');
+  });
+
   it('skips invalid keys', () => {
     const pool = new KeyPool([entry('a'), entry('b'), entry('c')]);
 

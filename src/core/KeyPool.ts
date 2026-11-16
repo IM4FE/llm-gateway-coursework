@@ -4,6 +4,13 @@ export interface KeyPoolEntry {
   id: string;
   value: string;
   hint: string;
+  /**
+   * Состояние, загруженное из БД. Поля необязательны:
+   * новый ключ ещё не имеет истории использования.
+   */
+  failureCount?: number;
+  cooldownUntil?: number | undefined;
+  lastUsedAt?: number | undefined;
 }
 
 export interface ProviderKey extends KeyPoolEntry {
@@ -45,7 +52,7 @@ export class KeyPool {
   private readonly keys: ProviderKey[];
   private cursor = 0;
 
-  constructor(entries: ReadonlyArray<KeyPoolEntry>) {
+  constructor(entries: ReadonlyArray<KeyPoolEntry>, now: number = Date.now()) {
     const ids = new Set<string>();
 
     for (const entry of entries) {
@@ -58,14 +65,23 @@ export class KeyPool {
       ids.add(entry.id);
     }
 
-    this.keys = entries.map((entry) => ({
-      ...entry,
-      state: 'active',
-      usageCount: 0,
-      failureCount: 0,
-      cooldownUntil: undefined,
-      lastUsedAt: undefined,
-    }));
+    this.keys = entries.map((entry) => {
+      const cooldownUntil =
+        entry.cooldownUntil !== undefined && entry.cooldownUntil > now
+          ? entry.cooldownUntil
+          : undefined;
+
+      return {
+        id: entry.id,
+        value: entry.value,
+        hint: entry.hint,
+        state: cooldownUntil === undefined ? 'active' : 'cooldown',
+        usageCount: 0,
+        failureCount: entry.failureCount ?? 0,
+        cooldownUntil,
+        lastUsedAt: entry.lastUsedAt,
+      };
+    });
   }
 
   get size(): number {

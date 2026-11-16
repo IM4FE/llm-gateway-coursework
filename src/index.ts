@@ -2,17 +2,21 @@ import { createProviderAdapter } from './adapters/createProviderAdapter.js';
 import { buildApp } from './app.js';
 import { createClientAuthenticator } from './auth/clientAuth.js';
 import { loadEnv } from './config/env.js';
+import type { KeyStateObserver } from './core/keyState.js';
 import { PoolRegistry } from './core/PoolRegistry.js';
 import { FixedWindowRateLimiter } from './core/RateLimiter.js';
 import { Router } from './core/Router.js';
 import { createApiKeyRepository } from './db/apiKeyRepository.js';
 import { createDatabase } from './db/client.js';
 import { createClientRepository } from './db/clientRepository.js';
+import { createKeyStateRepository } from './db/keyStateRepository.js';
 import { createRequestLogRepository } from './db/requestLogRepository.js';
+import { createLogger } from './logger.js';
 import { createDeploymentResolver } from './routes/deploymentResolver.js';
 import { createRouteRepository } from './routes/routeRepository.js';
 
 const env = loadEnv();
+const logger = createLogger(env);
 const database = createDatabase(env);
 
 const apiKeys = createApiKeyRepository(database.db, env.ENCRYPTION_KEY);
@@ -22,6 +26,21 @@ const clients = createClientRepository(database.db);
 const authenticateClient = createClientAuthenticator(clients);
 const rateLimiter = new FixedWindowRateLimiter();
 const requestLogs = createRequestLogRepository(database.db);
+const keyStates = createKeyStateRepository(database.db);
+
+/**
+ * Состояние ключей сохраняется best-effort: ошибка БД не должна
+ * ломать уже полученный ответ провайдера. В отличие от журнала
+ * запросов, здесь запись не ждётся — это горячий путь Router'а.
+ */
+const onKeyState: KeyStateObserver = (event) => {
+  void keyStates.record(event).catch((error: unknown) => {
+    logger.error(
+      { err: error, keyId: event.keyId, type: event.type },
+      'failed to persist key state',
+    );
+  });
+};
 
 const router = new Router(
   createDeploymentResolver({
@@ -46,6 +65,7 @@ const router = new Router(
       return Object.keys(headers).length > 0 ? headers : undefined;
     },
   }),
+  { onKeyState },
 );
 
 const app = buildApp(env, {
@@ -53,6 +73,7 @@ const app = buildApp(env, {
   authenticateClient,
   rateLimiter,
   requestLogs,
+  logger,
 });
 
 const shutdown = async (signal: NodeJS.Signals): Promise<void> => {

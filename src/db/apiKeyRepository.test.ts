@@ -14,12 +14,16 @@ import {
 const KEY = Buffer.alloc(32, 7);
 const KEY_BASE64 = KEY.toString('base64');
 const OTHER_KEY_BASE64 = Buffer.alloc(32, 9).toString('base64');
+const T0 = 1_000_000;
 
 function makeRow(id: string, value: string): ApiKeyRow {
   return {
     id,
     fingerprint: fingerprintSecret(value),
     keyHint: hintSecret(value),
+    failureCount: 0,
+    cooldownUntil: null,
+    lastUsedAt: null,
     ...encryptSecret(value, KEY),
   };
 }
@@ -56,6 +60,29 @@ describe('ApiKeyRepository', () => {
     expect(pool.size).toBe(2);
     expect(pool.acquire()?.id).toBe('key-1');
     expect(pool.acquire()?.id).toBe('key-2');
+  });
+
+  it('restores persisted key state from database rows', async () => {
+    const loader = vi.fn<ApiKeyRowLoader>().mockResolvedValue([
+      {
+        ...makeRow('key-1', 'secret'),
+        failureCount: 2,
+        cooldownUntil: new Date(T0 + 5_000),
+        lastUsedAt: new Date(T0 - 1_000),
+      },
+    ]);
+    const repository = new ApiKeyRepository(loader, KEY_BASE64);
+
+    await expect(repository.listActive('provider-1')).resolves.toEqual([
+      {
+        id: 'key-1',
+        value: 'secret',
+        hint: '...cret',
+        failureCount: 2,
+        cooldownUntil: T0 + 5_000,
+        lastUsedAt: T0 - 1_000,
+      },
+    ]);
   });
 
   it('creates an empty pool when the provider has no active keys', async () => {

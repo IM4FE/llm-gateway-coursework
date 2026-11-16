@@ -235,6 +235,65 @@ curl.exe -i -sS -X POST http://localhost:3000/v1/chat/completions `
   ответ провайдера, а ошибка сохранения попадёт в лог приложения;
 - `X-Request-Id` возвращается на всех ответах, включая ошибки.
 
+### Состояние ключей в БД
+
+Раньше cooldown и invalid-состояние жили только в памяти `KeyPool`:
+после перезапуска шлюз забывал, что ключ недавно получил `429`, и снова
+пробовал его первым.
+
+Теперь `api_keys` использует поля:
+
+- `failure_count` — счётчик ошибок ключа;
+- `cooldown_until` — до какого момента ключ не выдавать;
+- `last_used_at` — когда ключ последний раз участвовал в запросе;
+- `is_active` — `false` после `401/403`.
+
+При создании пула `ApiKeyRepository` читает эти поля, а `KeyPool`
+восстанавливает состояние:
+
+- `cooldown_until` в будущем → ключ сразу в `cooldown`;
+- `cooldown_until` в прошлом → ключ активен;
+- `failure_count` и `last_used_at` восстанавливаются как есть.
+
+Router сообщает об изменениях через `onKeyState`:
+
+| Событие | Что пишется в БД |
+|---|---|
+| успех | `failure_count = 0`, `cooldown_until = null`, `last_used_at = now` |
+| `429` | `cooldown_until = now + cooldownMs`, `failure_count += 1`, `last_used_at = now` |
+| `401/403` | `is_active = false`, `failure_count += 1`, `cooldown_until = null`, `last_used_at = now` |
+| другая ошибка | `failure_count += 1`, `last_used_at = now` |
+
+`failure_count += 1` выполняется атомарно в SQL, поэтому параллельные
+запросы не теряют инкременты.
+
+Запись состояния — best-effort и не ждётся в горячем пути Router'а.
+Если БД недоступна, ответ клиенту не ломается, а ошибка попадает в лог.
+
+Посмотреть состояние ключей:
+
+```sh
+docker compose exec postgres psql -U gateway -d llm_gateway -c \
+  "select id, key_hint, is_active, failure_count, cooldown_until, last_used_at from api_keys order by created_at;"
+```
+
+Сбросить cooldown и счётчик ошибок вручную:
+
+```sh
+docker compose exec postgres psql -U gateway -d llm_gateway -c \
+  "update api_keys set cooldown_until = null, failure_count = 0;"
+```
+
+Важно: `PoolRegistry` кэширует пулы в памяти. Состояние загружается
+при первом запросе к провайдеру после старта процесса. Если поменять
+ключи или их состояние в БД, нужно перезапустить шлюз (или вызвать
+`pools.refresh(providerId)`, когда появится админка).
+
+Ограничение: при одновременных success и `429` для одного ключа
+возможен last-write-wins для `cooldown_until`. Для учебного проекта
+это приемлемо; строгая версия потребовала бы версионирования
+или отдельной таблицы событий.
+
 Чтобы запрос дошёл до OpenRouter, в БД должны быть:
 
 - провайдер `OpenRouter` с `base_url = https://openrouter.ai/api/v1`;
@@ -322,7 +381,7 @@ deepseek/deepseek-r1:free
 - [x] Аутентификация клиентов по Bearer-ключу (SHA-256 в БД)
 - [x] Rate limit по клиентам (in-memory, фиксированное окно)
 - [x] Журнал запросов: `request_logs` и `request_attempts`
-- [ ] Сохранение состояния ключей (cooldown, last_used_at) в БД
+- [x] Сохранение состояния ключей (cooldown, last_used_at) в БД
 - [ ] Streaming в адаптере (SSE)
 - [ ] Circuit breaker
 - [ ] SSE streaming

@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks';
 
 import { GatewayError, toGatewayError } from './errors.js';
+import type { KeyStateEvent, KeyStateObserver } from './keyState.js';
 import type { KeyPool } from './KeyPool.js';
 import type {
   ChatOptions,
@@ -43,6 +44,14 @@ export interface RouterOptions {
    * запрос в десятки исходящих вызовов.
    */
   maxAttempts?: number;
+  /**
+   * Наблюдатель за состоянием ключей.
+   *
+   * Router не пишет в БД: он сообщает, что ключ был успешно
+   * использован, получил 429, стал невалидным или временно упал.
+   * Слой `db` решает, как это сохранить.
+   */
+  onKeyState?: KeyStateObserver;
 }
 
 export interface RouterChatOptions {
@@ -104,11 +113,13 @@ const TERMINAL_ERRORS: ReadonlySet<GatewayError['code']> = new Set([
  * - 400 / отмена клиентом — повторять бессмысленно: остановиться.
  *
  * Router не работает с HTTP и не пишет в БД. Он возвращает нормализованный
- * ответ или `GatewayError`, а логированием займётся слой выше.
+ * ответ или `GatewayError`, а обо всех попытках и изменениях состояния
+ * ключей сообщает наблюдателям. Сохранением занимается слой выше.
  */
 export class Router {
   private readonly cooldownMs: number;
   private readonly maxAttempts: number;
+  private readonly onKeyState: KeyStateObserver | undefined;
 
   constructor(
     private readonly resolveDeployments: DeploymentResolver,
@@ -116,6 +127,7 @@ export class Router {
   ) {
     this.cooldownMs = options.cooldownMs ?? DEFAULT_COOLDOWN_MS;
     this.maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+    this.onKeyState = options.onKeyState;
 
     if (this.cooldownMs < 0) {
       throw new Error('cooldownMs must be non-negative');
@@ -178,7 +190,15 @@ export class Router {
             buildChatOptions(deployment, key.value, options),
           );
 
-          deployment.keyPool.reportSuccess(key.id);
+          const succeededAt = Date.now();
+
+          deployment.keyPool.reportSuccess(key.id, succeededAt);
+
+          reportKeyState(this.onKeyState, {
+            keyId: key.id,
+            type: 'success',
+            at: succeededAt,
+          });
 
           reportAttempt(options.onAttempt, {
             attemptNo: attempts,
@@ -212,7 +232,12 @@ export class Router {
             latencyMs: Math.round(performance.now() - attemptStartedAt),
           });
 
-          this.reportKeyFailure(deployment.keyPool, key.id, gatewayError);
+          this.reportKeyFailure(
+            deployment.keyPool,
+            key.id,
+            gatewayError,
+            Date.now(),
+          );
 
           if (TERMINAL_ERRORS.has(gatewayError.code)) {
             throw gatewayError;
@@ -269,17 +294,34 @@ export class Router {
     keyPool: KeyPool,
     keyId: string,
     error: GatewayError,
+    now: number,
   ): void {
     switch (error.code) {
       case 'rate_limited':
-        keyPool.reportRateLimit(keyId, this.cooldownMs);
+        keyPool.reportRateLimit(keyId, this.cooldownMs, now);
+        reportKeyState(this.onKeyState, {
+          keyId,
+          type: 'rate_limited',
+          at: now,
+          cooldownUntil: now + this.cooldownMs,
+        });
         return;
       case 'unauthorized':
       case 'forbidden':
         keyPool.reportInvalid(keyId);
+        reportKeyState(this.onKeyState, {
+          keyId,
+          type: 'invalid',
+          at: now,
+        });
         return;
       default:
         keyPool.reportFailure(keyId);
+        reportKeyState(this.onKeyState, {
+          keyId,
+          type: 'failure',
+          at: now,
+        });
     }
   }
 }
@@ -301,6 +343,25 @@ function reportAttempt(
     observer(attempt);
   } catch {
     // Логирование — вспомогательная операция, а не часть ответа клиенту.
+  }
+}
+
+/**
+ * Наблюдатель за ключами, как и наблюдатель за попытками,
+ * не должен ломать основной путь запроса.
+ */
+function reportKeyState(
+  observer: KeyStateObserver | undefined,
+  event: KeyStateEvent,
+): void {
+  if (observer === undefined) {
+    return;
+  }
+
+  try {
+    observer(event);
+  } catch {
+    // Сохранение состояния ключа — вспомогательная операция.
   }
 }
 

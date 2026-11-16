@@ -18,6 +18,9 @@ export interface ApiKeyRow extends EncryptedSecret {
   id: string;
   fingerprint: string;
   keyHint: string;
+  failureCount: number;
+  cooldownUntil: Date | null;
+  lastUsedAt: Date | null;
 }
 
 export type ApiKeyRowLoader = (providerId: string) => Promise<ApiKeyRow[]>;
@@ -67,6 +70,15 @@ export class ApiKeyRepository {
         id: row.id,
         value,
         hint: row.keyHint,
+        ...(row.failureCount > 0
+          ? { failureCount: row.failureCount }
+          : {}),
+        ...(row.cooldownUntil !== null
+          ? { cooldownUntil: row.cooldownUntil.getTime() }
+          : {}),
+        ...(row.lastUsedAt !== null
+          ? { lastUsedAt: row.lastUsedAt.getTime() }
+          : {}),
       };
     });
   }
@@ -99,6 +111,9 @@ export function createApiKeyRepository(
         iv: apiKeys.iv,
         authTag: apiKeys.authTag,
         keyHint: apiKeys.keyHint,
+        failureCount: apiKeys.failureCount,
+        cooldownUntil: apiKeys.cooldownUntil,
+        lastUsedAt: apiKeys.lastUsedAt,
       })
       .from(apiKeys)
       .where(
