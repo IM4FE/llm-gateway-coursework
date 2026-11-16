@@ -4,6 +4,7 @@ import { GatewayError } from './errors.js';
 import { KeyPool } from './KeyPool.js';
 import {
   Router,
+  type RouterAttempt,
   type RouterDeployment,
   type RouterOptions,
 } from './Router.js';
@@ -471,5 +472,101 @@ describe('Router', () => {
     expect(
       () => new Router(() => [], { cooldownMs: -1 }),
     ).toThrow('cooldownMs must be non-negative');
+  });
+});
+
+describe('Router attempt observer', () => {
+  it('reports a successful attempt with provider, key and upstream model', async () => {
+    const adapter = new FakeAdapter('Mock', response());
+    const router = makeRouter([
+      makeDeployment({
+        adapter,
+        keyPool: makePool('a'),
+        providerId: 'provider-1',
+        upstreamModel: 'upstream-model',
+      }),
+    ]);
+    const attempts: RouterAttempt[] = [];
+
+    await router.chat(request, {
+      onAttempt: (attempt) => attempts.push(attempt),
+    });
+
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({
+      attemptNo: 1,
+      providerId: 'provider-1',
+      apiKeyId: 'a',
+      upstreamModel: 'upstream-model',
+      status: 'success',
+      httpStatus: 200,
+    });
+    expect(attempts[0]?.latencyMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('reports failed and successful attempts in order during fallback', async () => {
+    const adapter = new FakeAdapter(
+      'Mock',
+      gatewayError('rate_limited'),
+      response('Mock', 'second-key'),
+    );
+    const router = makeRouter([
+      makeDeployment({ adapter, keyPool: makePool('a', 'b') }),
+    ]);
+    const attempts: RouterAttempt[] = [];
+
+    await router.chat(request, {
+      onAttempt: (attempt) => attempts.push(attempt),
+    });
+
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]).toMatchObject({
+      attemptNo: 1,
+      apiKeyId: 'a',
+      status: 'error',
+      errorCode: 'rate_limited',
+    });
+    expect(attempts[0]?.httpStatus).toBeUndefined();
+    expect(attempts[1]).toMatchObject({
+      attemptNo: 2,
+      apiKeyId: 'b',
+      status: 'success',
+    });
+  });
+
+  it('marks provider timeouts as timeout attempts', async () => {
+    const first = new FakeAdapter('First', gatewayError('provider_timeout'));
+    const second = new FakeAdapter('Second', response('Second'));
+    const router = makeRouter([
+      makeDeployment({ adapter: first, keyPool: makePool('a') }),
+      makeDeployment({ adapter: second, keyPool: makePool('b') }),
+    ]);
+    const attempts: RouterAttempt[] = [];
+
+    await router.chat(request, {
+      onAttempt: (attempt) => attempts.push(attempt),
+    });
+
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]).toMatchObject({
+      status: 'timeout',
+      errorCode: 'provider_timeout',
+    });
+    expect(attempts[1]?.status).toBe('success');
+  });
+
+  it('does not fail the request when the observer throws', async () => {
+    const adapter = new FakeAdapter('Mock', response());
+    const router = makeRouter([
+      makeDeployment({ adapter, keyPool: makePool('a') }),
+    ]);
+
+    await expect(
+      router.chat(request, {
+        onAttempt: () => {
+          throw new Error('observer failed');
+        },
+      }),
+    ).resolves.toMatchObject({ content: 'ok' });
   });
 });

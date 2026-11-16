@@ -175,6 +175,66 @@ X-RateLimit-Reset: 1800000000
 запустить несколько экземпляров шлюза, у каждого будет свой лимит. Для
 горизонтального масштабирования счётчики нужно вынести в Redis.
 
+### Журнал запросов
+
+Каждый запрос, дошедший до Router, сохраняется в две таблицы:
+
+- `request_logs` — итог запроса: клиент, alias, фактическая модель,
+  провайдер, ключ, токены, latency, статус и код ошибки;
+- `request_attempts` — каждая фактическая попытка Router'а: провайдер,
+  ключ, HTTP-статус, ошибка и latency.
+
+Запрос и его попытки пишутся одной транзакцией. Если вставка попыток
+упадёт, запись о запросе тоже откатится: в журнале не появится запрос
+без истории fallback'а.
+
+Каждый ответ получает заголовок:
+
+```http
+X-Request-Id: 6f1c2a7e-0f6b-4a9c-9d7e-3b5a1c8e2d40
+```
+
+Это внутренний идентификатор запроса. По нему можно найти запись:
+
+```sh
+docker compose exec postgres psql -U gateway -d llm_gateway -c \
+  "select request_id, requested_model, actual_model, status, error_code, latency_ms from request_logs order by created_at desc limit 5;"
+```
+
+И попытки этого запроса:
+
+```sh
+docker compose exec postgres psql -U gateway -d llm_gateway -c \
+  "select a.attempt_no, a.status, a.http_status, a.error_code, a.latency_ms from request_attempts a join request_logs l on l.id = a.request_log_id where l.request_id = '6f1c2a7e-0f6b-4a9c-9d7e-3b5a1c8e2d40' order by a.attempt_no;"
+```
+
+Посмотреть `X-Request-Id` в ответе:
+
+```sh
+curl -i -sS http://localhost:3000/v1/chat/completions \
+  -H "Authorization: Bearer $CLIENT_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"fast-model","messages":[{"role":"user","content":"Hello!"}]}'
+```
+
+В PowerShell:
+
+```powershell
+curl.exe -i -sS -X POST http://localhost:3000/v1/chat/completions `
+  -H "Authorization: Bearer $env:CLIENT_KEY" `
+  -H "Content-Type: application/json" `
+  -d '{"model":"fast-model","messages":[{"role":"user","content":"Hello!"}]}'
+```
+
+Важные детали:
+
+- `cost_micros` пока всегда `0`: расчёт стоимости появится отдельным шагом;
+- запросы, отклонённые до Router (`401`, `429`, `400`), в журнал не пишутся —
+  они видны в логах приложения;
+- запись журнала best-effort: если БД недоступна, клиент всё равно получит
+  ответ провайдера, а ошибка сохранения попадёт в лог приложения;
+- `X-Request-Id` возвращается на всех ответах, включая ошибки.
+
 Чтобы запрос дошёл до OpenRouter, в БД должны быть:
 
 - провайдер `OpenRouter` с `base_url = https://openrouter.ai/api/v1`;
@@ -261,9 +321,10 @@ deepseek/deepseek-r1:free
 - [x] Seed-скрипт для провайдера, модели, alias и ключа
 - [x] Аутентификация клиентов по Bearer-ключу (SHA-256 в БД)
 - [x] Rate limit по клиентам (in-memory, фиксированное окно)
+- [x] Журнал запросов: `request_logs` и `request_attempts`
 - [ ] Сохранение состояния ключей (cooldown, last_used_at) в БД
 - [ ] Streaming в адаптере (SSE)
 - [ ] Circuit breaker
 - [ ] SSE streaming
-- [ ] Журнал запросов и стоимость
+- [ ] Расчёт стоимости запросов
 - [ ] Demo/admin-консоль

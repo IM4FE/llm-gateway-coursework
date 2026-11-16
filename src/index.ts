@@ -8,6 +8,7 @@ import { Router } from './core/Router.js';
 import { createApiKeyRepository } from './db/apiKeyRepository.js';
 import { createDatabase } from './db/client.js';
 import { createClientRepository } from './db/clientRepository.js';
+import { createRequestLogRepository } from './db/requestLogRepository.js';
 import { createDeploymentResolver } from './routes/deploymentResolver.js';
 import { createRouteRepository } from './routes/routeRepository.js';
 
@@ -20,6 +21,7 @@ const routes = createRouteRepository(database.db);
 const clients = createClientRepository(database.db);
 const authenticateClient = createClientAuthenticator(clients);
 const rateLimiter = new FixedWindowRateLimiter();
+const requestLogs = createRequestLogRepository(database.db);
 
 const router = new Router(
   createDeploymentResolver({
@@ -46,7 +48,12 @@ const router = new Router(
   }),
 );
 
-const app = buildApp(env, { router, authenticateClient, rateLimiter });
+const app = buildApp(env, {
+  router,
+  authenticateClient,
+  rateLimiter,
+  requestLogs,
+});
 
 const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
   app.log.info({ signal }, 'shutting down');

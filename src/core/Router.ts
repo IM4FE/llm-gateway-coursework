@@ -1,3 +1,5 @@
+import { performance } from 'node:perf_hooks';
+
 import { GatewayError, toGatewayError } from './errors.js';
 import type { KeyPool } from './KeyPool.js';
 import type {
@@ -45,7 +47,33 @@ export interface RouterOptions {
 
 export interface RouterChatOptions {
   signal?: AbortSignal;
+  /**
+   * Наблюдатель за попытками. Router вызывает его после каждого
+   * фактического обращения к провайдеру — и при успехе, и при ошибке.
+   *
+   * Это позволяет HTTP-слою собрать историю fallback'а и сохранить
+   * её в request_attempts, не превращая Router в зависимость от БД.
+   */
+  onAttempt?: AttemptObserver;
 }
+
+export type RouterAttemptStatus = 'success' | 'error' | 'timeout';
+
+/**
+ * Одна фактическая попытка вызова провайдера.
+ */
+export interface RouterAttempt {
+  attemptNo: number;
+  providerId: string;
+  apiKeyId: string;
+  upstreamModel: string;
+  status: RouterAttemptStatus;
+  httpStatus?: number;
+  errorCode?: GatewayError['code'];
+  latencyMs: number;
+}
+
+export type AttemptObserver = (attempt: RouterAttempt) => void;
 
 const DEFAULT_COOLDOWN_MS = 60_000;
 const DEFAULT_MAX_ATTEMPTS = 6;
@@ -142,6 +170,7 @@ export class Router {
           ...completion,
           upstreamModel: deployment.upstreamModel,
         };
+        const attemptStartedAt = performance.now();
 
         try {
           const response = await deployment.adapter.chat(
@@ -151,6 +180,16 @@ export class Router {
 
           deployment.keyPool.reportSuccess(key.id);
 
+          reportAttempt(options.onAttempt, {
+            attemptNo: attempts,
+            providerId: deployment.providerId,
+            apiKeyId: key.id,
+            upstreamModel: deployment.upstreamModel,
+            status: 'success',
+            httpStatus: 200,
+            latencyMs: Math.round(performance.now() - attemptStartedAt),
+          });
+
           return {
             ...response,
             requestedModel: request.model,
@@ -158,6 +197,20 @@ export class Router {
         } catch (error) {
           const gatewayError = toGatewayError(error);
           lastError = gatewayError;
+
+          reportAttempt(options.onAttempt, {
+            attemptNo: attempts,
+            providerId: deployment.providerId,
+            apiKeyId: key.id,
+            upstreamModel: deployment.upstreamModel,
+            status:
+              gatewayError.code === 'provider_timeout' ? 'timeout' : 'error',
+            ...(gatewayError.providerStatus !== undefined
+              ? { httpStatus: gatewayError.providerStatus }
+              : {}),
+            errorCode: gatewayError.code,
+            latencyMs: Math.round(performance.now() - attemptStartedAt),
+          });
 
           this.reportKeyFailure(deployment.keyPool, key.id, gatewayError);
 
@@ -228,6 +281,26 @@ export class Router {
       default:
         keyPool.reportFailure(keyId);
     }
+  }
+}
+
+/**
+ * Наблюдатель не должен ломать основной путь запроса.
+ * Если он бросит исключение, Router продолжит работать так,
+ * как будто попытка не была зарегистрирована.
+ */
+function reportAttempt(
+  observer: AttemptObserver | undefined,
+  attempt: RouterAttempt,
+): void {
+  if (observer === undefined) {
+    return;
+  }
+
+  try {
+    observer(attempt);
+  } catch {
+    // Логирование — вспомогательная операция, а не часть ответа клиенту.
   }
 }
 

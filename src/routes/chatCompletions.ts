@@ -1,4 +1,7 @@
-import type { FastifyInstance } from 'fastify';
+import { randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
+
+import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import type {
@@ -11,12 +14,17 @@ import {
   type GatewayErrorCode,
 } from '../core/errors.js';
 import type { RateLimiter } from '../core/RateLimiter.js';
-import type { RouterChatOptions } from '../core/Router.js';
+import type { RouterAttempt, RouterChatOptions } from '../core/Router.js';
 import type {
   ChatRequest,
   ChatResponse,
   FinishReason,
 } from '../core/types.js';
+import type {
+  RequestAttemptRecord,
+  RequestLogRecord,
+  RequestLogRepository,
+} from '../db/requestLogRepository.js';
 
 /**
  * Интерфейс, который нужен HTTP-слою от Router.
@@ -34,6 +42,11 @@ export interface ChatCompletionDependencies {
   router?: ChatCompletionHandler;
   authenticateClient?: ClientAuthenticator;
   rateLimiter?: RateLimiter;
+  /**
+   * Журнал запросов. Необязателен: если его нет, шлюз работает
+   * как раньше, просто не сохраняет историю.
+   */
+  requestLogs?: RequestLogRepository;
 }
 
 const chatMessageSchema = z.object({
@@ -97,6 +110,13 @@ export function registerChatCompletionRoute(
   dependencies: ChatCompletionDependencies,
 ): void {
   app.post('/v1/chat/completions', async (request, reply) => {
+    const requestId = randomUUID();
+    const startedAt = performance.now();
+
+    // X-Request-Id полезен и клиенту, и нам: по нему можно найти
+    // запись в request_logs и все попытки в request_attempts.
+    reply.header('X-Request-Id', requestId);
+
     if (dependencies.authenticateClient === undefined) {
       const error = new GatewayError({
         code: 'internal_error',
@@ -194,10 +214,34 @@ export function registerChatCompletionRoute(
       return reply.status(error.httpStatus).send(toErrorResponse(error));
     }
 
+    const attempts: RouterAttempt[] = [];
+    const chatRequest = toChatRequest(parsed.data);
+
     try {
-      const response = await dependencies.router.chat(
-        toChatRequest(parsed.data),
-      );
+      const response = await dependencies.router.chat(chatRequest, {
+        onAttempt: (attempt) => {
+          attempts.push(attempt);
+        },
+      });
+
+      await persistRequestLog(dependencies.requestLogs, request.log, {
+        requestId,
+        clientId: client.id,
+        requestedModel: parsed.data.model,
+        actualModel: lastAttempt(attempts)?.upstreamModel ?? response.model,
+        providerId: lastAttempt(attempts)?.providerId ?? null,
+        apiKeyId: lastAttempt(attempts)?.apiKeyId ?? null,
+        promptTokens: response.usage.promptTokens,
+        completionTokens: response.usage.completionTokens,
+        totalTokens: response.usage.totalTokens,
+        costMicros: 0,
+        latencyMs: Math.round(performance.now() - startedAt),
+        ttftMs: response.ttftMs ?? null,
+        status: 'success',
+        errorCode: null,
+        isStream: parsed.data.stream === true,
+        attempts: toAttemptRecords(attempts),
+      });
 
       return reply.send(
         toChatCompletionResponse(response, parsed.data.model),
@@ -205,8 +249,27 @@ export function registerChatCompletionRoute(
     } catch (error) {
       const gatewayError = toGatewayError(error);
 
+      await persistRequestLog(dependencies.requestLogs, request.log, {
+        requestId,
+        clientId: client.id,
+        requestedModel: parsed.data.model,
+        actualModel: lastAttempt(attempts)?.upstreamModel ?? null,
+        providerId: lastAttempt(attempts)?.providerId ?? null,
+        apiKeyId: lastAttempt(attempts)?.apiKeyId ?? null,
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        costMicros: 0,
+        latencyMs: Math.round(performance.now() - startedAt),
+        ttftMs: null,
+        status: requestStatusFromError(gatewayError, attempts),
+        errorCode: gatewayError.code,
+        isStream: parsed.data.stream === true,
+        attempts: toAttemptRecords(attempts),
+      });
+
       request.log.warn(
-        { err: gatewayError, code: gatewayError.code },
+        { err: gatewayError, code: gatewayError.code, requestId },
         'chat completion failed',
       );
 
@@ -290,6 +353,59 @@ export function toErrorResponse(
   }
 
   return response;
+}
+
+function lastAttempt(attempts: RouterAttempt[]): RouterAttempt | undefined {
+  return attempts.at(-1);
+}
+
+function toAttemptRecords(
+  attempts: RouterAttempt[],
+): RequestAttemptRecord[] {
+  return attempts.map((attempt) => ({
+    attemptNo: attempt.attemptNo,
+    providerId: attempt.providerId,
+    apiKeyId: attempt.apiKeyId,
+    status: attempt.status,
+    httpStatus: attempt.httpStatus ?? null,
+    errorCode: attempt.errorCode ?? null,
+    latencyMs: attempt.latencyMs,
+  }));
+}
+
+function requestStatusFromError(
+  error: GatewayError,
+  attempts: RouterAttempt[],
+): RequestLogRecord['status'] {
+  if (
+    error.code === 'provider_timeout' ||
+    lastAttempt(attempts)?.status === 'timeout'
+  ) {
+    return 'timeout';
+  }
+
+  return 'error';
+}
+
+async function persistRequestLog(
+  repository: RequestLogRepository | undefined,
+  logger: FastifyBaseLogger,
+  record: RequestLogRecord,
+): Promise<void> {
+  if (repository === undefined) {
+    return;
+  }
+
+  try {
+    await repository.save(record);
+  } catch (error) {
+    // Журнал — вспомогательная функция. Ошибка записи в БД не должна
+    // превращать успешный ответ провайдера в ошибку для клиента.
+    logger.error(
+      { err: error, requestId: record.requestId },
+      'failed to persist request log',
+    );
+  }
 }
 
 function formatValidationError(error: z.ZodError): string {

@@ -9,8 +9,13 @@ import type {
 import type { Env } from '../config/env.js';
 import { GatewayError } from '../core/errors.js';
 import type { RateLimitDecision, RateLimiter } from '../core/RateLimiter.js';
-import type { RouterChatOptions } from '../core/Router.js';
+import type { RouterAttempt, RouterChatOptions } from '../core/Router.js';
 import type { ChatRequest, ChatResponse } from '../core/types.js';
+import {
+  RequestLogRepository,
+  type RequestLogRecord,
+  type RequestLogWriter,
+} from '../db/requestLogRepository.js';
 import type { ChatCompletionHandler } from './chatCompletions.js';
 
 const testEnv: Env = {
@@ -65,13 +70,20 @@ const allowAllLimiter: RateLimiter = {
 class FakeRouter implements ChatCompletionHandler {
   readonly calls: ChatRequest[] = [];
 
-  constructor(private readonly outcome: ChatResponse | Error) {}
+  constructor(
+    private readonly outcome: ChatResponse | Error,
+    private readonly attempts: RouterAttempt[] = [],
+  ) {}
 
   async chat(
     request: ChatRequest,
-    _options?: RouterChatOptions,
+    options?: RouterChatOptions,
   ): Promise<ChatResponse> {
     this.calls.push(request);
+
+    for (const attempt of this.attempts) {
+      options?.onAttempt?.(attempt);
+    }
 
     if (this.outcome instanceof Error) {
       throw this.outcome;
@@ -111,11 +123,13 @@ function createApp(
   router?: ChatCompletionHandler,
   authenticateClient: ClientAuthenticator = allowAllClients,
   rateLimiter: RateLimiter = allowAllLimiter,
+  requestLogs?: RequestLogRepository,
 ): FastifyInstance {
   app = buildApp(testEnv, {
     authenticateClient,
     rateLimiter,
     ...(router === undefined ? {} : { router }),
+    ...(requestLogs === undefined ? {} : { requestLogs }),
   });
   return app;
 }
@@ -520,5 +534,225 @@ describe('rate limiting on POST /v1/chat/completions', () => {
         code: 'internal_error',
       },
     });
+  });
+});
+
+function successAttempt(
+  overrides: Partial<RouterAttempt> = {},
+): RouterAttempt {
+  return {
+    attemptNo: 1,
+    providerId: 'provider-1',
+    apiKeyId: 'key-1',
+    upstreamModel: 'upstream-model',
+    status: 'success',
+    httpStatus: 200,
+    latencyMs: 5,
+    ...overrides,
+  };
+}
+
+describe('request logging on POST /v1/chat/completions', () => {
+  it('stores a successful request together with its attempts', async () => {
+    const writer = vi.fn<RequestLogWriter>().mockResolvedValue(undefined);
+    const router = new FakeRouter(chatResponse(), [successAttempt()]);
+    const server = createApp(
+      router,
+      allowAllClients,
+      allowAllLimiter,
+      new RequestLogRepository(writer),
+    );
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'fast-model',
+        messages: [{ role: 'user', content: 'Привет!' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
+
+    expect(writer).toHaveBeenCalledTimes(1);
+
+    const record = writer.mock.calls[0]![0];
+
+    expect(record).toMatchObject({
+      clientId: 'client-1',
+      requestedModel: 'fast-model',
+      actualModel: 'upstream-model',
+      providerId: 'provider-1',
+      apiKeyId: 'key-1',
+      promptTokens: 10,
+      completionTokens: 2,
+      totalTokens: 12,
+      status: 'success',
+      errorCode: null,
+      isStream: false,
+    });
+    expect(record.requestId).toBe(response.headers['x-request-id']);
+    expect(record.attempts).toEqual([
+      {
+        attemptNo: 1,
+        providerId: 'provider-1',
+        apiKeyId: 'key-1',
+        status: 'success',
+        httpStatus: 200,
+        errorCode: null,
+        latencyMs: 5,
+      },
+    ]);
+  });
+
+  it('stores a failed request with the upstream error', async () => {
+    const writer = vi.fn<RequestLogWriter>().mockResolvedValue(undefined);
+    const router = new FakeRouter(
+      new GatewayError({
+        code: 'upstream_error',
+        message: 'provider exploded',
+        providerStatus: 500,
+      }),
+      [
+        successAttempt({
+          status: 'error',
+          httpStatus: 500,
+          errorCode: 'upstream_error',
+        }),
+      ],
+    );
+    const server = createApp(
+      router,
+      allowAllClients,
+      allowAllLimiter,
+      new RequestLogRepository(writer),
+    );
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'fast-model',
+        messages: [{ role: 'user', content: 'Привет!' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(502);
+
+    const record = writer.mock.calls[0]![0];
+
+    expect(record).toMatchObject({
+      clientId: 'client-1',
+      requestedModel: 'fast-model',
+      actualModel: 'upstream-model',
+      providerId: 'provider-1',
+      apiKeyId: 'key-1',
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      status: 'error',
+      errorCode: 'upstream_error',
+    });
+    expect(record.attempts[0]).toMatchObject({
+      status: 'error',
+      httpStatus: 500,
+      errorCode: 'upstream_error',
+    });
+  });
+
+  it('marks a request as timeout when the last attempt timed out', async () => {
+    const writer = vi.fn<RequestLogWriter>().mockResolvedValue(undefined);
+    const router = new FakeRouter(
+      new GatewayError({
+        code: 'provider_timeout',
+        message: 'provider timed out',
+      }),
+      [
+        {
+          attemptNo: 1,
+          providerId: 'provider-1',
+          apiKeyId: 'key-1',
+          upstreamModel: 'upstream-model',
+          status: 'timeout',
+          errorCode: 'provider_timeout',
+          latencyMs: 30_000,
+        },
+      ],
+    );
+    const server = createApp(
+      router,
+      allowAllClients,
+      allowAllLimiter,
+      new RequestLogRepository(writer),
+    );
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'fast-model',
+        messages: [{ role: 'user', content: 'Привет!' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(504);
+
+    const record = writer.mock.calls[0]![0];
+
+    expect(record).toMatchObject({
+      status: 'timeout',
+      errorCode: 'provider_timeout',
+    });
+    expect(record.attempts[0]).toMatchObject({
+      status: 'timeout',
+      httpStatus: null,
+      errorCode: 'provider_timeout',
+    });
+  });
+
+  it('does not fail the response when the log cannot be stored', async () => {
+    const writer = vi
+      .fn<RequestLogWriter>()
+      .mockRejectedValue(new Error('database is down'));
+    const router = new FakeRouter(chatResponse(), [successAttempt()]);
+    const server = createApp(
+      router,
+      allowAllClients,
+      allowAllLimiter,
+      new RequestLogRepository(writer),
+    );
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'fast-model',
+        messages: [{ role: 'user', content: 'Привет!' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      object: 'chat.completion',
+      model: 'fast-model',
+    });
+    expect(writer).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns X-Request-Id even when the request is rejected', async () => {
+    const server = createApp(new FakeRouter(chatResponse()));
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      payload: {
+        model: 'fast-model',
+        messages: [],
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
   });
 });
