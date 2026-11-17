@@ -71,6 +71,9 @@ export function createKeyStateRepository(
             .update(apiKeys)
             .set({
               failureCount: sql`${apiKeys.failureCount} + 1`,
+              ...(event.cooldownUntil !== undefined
+                ? { cooldownUntil: new Date(event.cooldownUntil) }
+                : {}),
               lastUsedAt: at,
               updatedAt: at,
             })

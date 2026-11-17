@@ -25,7 +25,7 @@ Router / application layer
   │  выбор стратегии, цепочка fallback, circuit breaker
   ▼
 Key pool
-  │  round-robin по ключам провайдера, cooldown при 429
+  │  round-robin по ключам, cooldown при 429 и серии ошибок
   ▼
 Adapter layer
   │  OpenAICompatibleAdapter, AnthropicAdapter, OllamaAdapter, MockAdapter
@@ -103,7 +103,7 @@ alias "fast-model"
 - per-attempt timeout;
 - общий deadline на запрос;
 - максимум попыток;
-- circuit breaker на провайдера;
+- circuit breaker на ключ (cooldown после серии ошибок);
 - запись каждой попытки в `request_attempts`.
 
 ## 6. Ротация ключей

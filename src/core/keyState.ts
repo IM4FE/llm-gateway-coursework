@@ -17,7 +17,8 @@ export interface KeyStateEvent {
   at: number;
   /**
    * До какого момента ключ должен быть в cooldown.
-   * Заполняется только для `rate_limited`.
+   * Заполняется для `rate_limited` и для `failure`, когда
+   * circuit breaker открылся после серии ошибок.
    */
   cooldownUntil?: number;
 }

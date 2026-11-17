@@ -740,6 +740,69 @@ describe('Router key state observer', () => {
     expect(events[0]!.cooldownUntil).toBeUndefined();
   });
 
+  it('opens the key circuit after repeated failures', async () => {
+    const adapter = new FakeAdapter(
+      'Mock',
+      gatewayError('upstream_error'),
+      gatewayError('upstream_error'),
+      gatewayError('upstream_error'),
+    );
+    const keyPool = makePool('a');
+    const events: KeyStateEvent[] = [];
+    const router = makeRouter(
+      [makeDeployment({ adapter, keyPool })],
+      { onKeyState: (event) => events.push(event) },
+    );
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(router.chat(request)).rejects.toMatchObject({
+        code: 'all_providers_failed',
+      });
+    }
+
+    expect(adapter.calls).toHaveLength(3);
+    expect(keyPool.snapshot().keys[0]).toMatchObject({
+      state: 'cooldown',
+      failureCount: 3,
+    });
+
+    const openingEvent = events.at(-1)!;
+
+    expect(openingEvent).toMatchObject({
+      keyId: 'a',
+      type: 'failure',
+    });
+    expect(openingEvent.cooldownUntil).toBeGreaterThan(openingEvent.at);
+
+    await expect(router.chat(request)).rejects.toMatchObject({
+      code: 'all_providers_failed',
+    });
+    expect(adapter.calls).toHaveLength(3);
+  });
+
+  it('does not open the key circuit on terminal client errors', async () => {
+    const adapter = new FakeAdapter(
+      'Mock',
+      gatewayError('client_disconnected'),
+      gatewayError('client_disconnected'),
+      gatewayError('client_disconnected'),
+    );
+    const keyPool = makePool('a');
+    const router = makeRouter([makeDeployment({ adapter, keyPool })]);
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(router.chat(request)).rejects.toMatchObject({
+        code: 'client_disconnected',
+      });
+    }
+
+    expect(adapter.calls).toHaveLength(3);
+    expect(keyPool.snapshot().keys[0]).toMatchObject({
+      state: 'active',
+      failureCount: 0,
+    });
+  });
+
   it('does not fail the request when the key state observer throws', async () => {
     const adapter = new FakeAdapter('Mock', response());
     const router = makeRouter(
@@ -948,6 +1011,34 @@ describe('Router streaming', () => {
     ).rejects.toMatchObject({
       code: 'no_route',
     });
+  });
+
+  it('opens the key circuit after repeated streaming failures', async () => {
+    const adapter = new FakeStreamingAdapter(
+      'Mock',
+      gatewayError('provider_unavailable'),
+      gatewayError('provider_unavailable'),
+      gatewayError('provider_unavailable'),
+    );
+    const keyPool = makePool('a');
+    const router = makeRouter([makeDeployment({ adapter, keyPool })]);
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(
+        collectChunks(router.chatStream({ ...request, stream: true })),
+      ).rejects.toMatchObject({ code: 'all_providers_failed' });
+    }
+
+    expect(adapter.streamCalls).toHaveLength(3);
+    expect(keyPool.snapshot().keys[0]).toMatchObject({
+      state: 'cooldown',
+      failureCount: 3,
+    });
+
+    await expect(
+      collectChunks(router.chatStream({ ...request, stream: true })),
+    ).rejects.toMatchObject({ code: 'all_providers_failed' });
+    expect(adapter.streamCalls).toHaveLength(3);
   });
 
   it('rejects when no key is available', async () => {

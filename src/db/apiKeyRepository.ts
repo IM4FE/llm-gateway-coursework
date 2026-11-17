@@ -1,6 +1,10 @@
 import { and, asc, eq } from 'drizzle-orm';
 
-import { KeyPool, type KeyPoolEntry } from '../core/KeyPool.js';
+import {
+  KeyPool,
+  type KeyPoolEntry,
+  type KeyPoolOptions,
+} from '../core/KeyPool.js';
 import {
   decodeEncryptionKey,
   decryptSecret,
@@ -86,8 +90,15 @@ export class ApiKeyRepository {
   /**
    * Создаёт готовый пул ключей для провайдера.
    */
-  async createPool(providerId: string): Promise<KeyPool> {
-    return new KeyPool(await this.listActive(providerId));
+  async createPool(
+    providerId: string,
+    options: KeyPoolOptions = {},
+  ): Promise<KeyPool> {
+    return new KeyPool(
+      await this.listActive(providerId),
+      Date.now(),
+      options,
+    );
   }
 }
 

@@ -446,7 +446,8 @@ Router сообщает об изменениях через `onKeyState`:
 | успех | `failure_count = 0`, `cooldown_until = null`, `last_used_at = now` |
 | `429` | `cooldown_until = now + cooldownMs`, `failure_count += 1`, `last_used_at = now` |
 | `401/403` | `is_active = false`, `failure_count += 1`, `cooldown_until = null`, `last_used_at = now` |
-| другая ошибка | `failure_count += 1`, `last_used_at = now` |
+| другая ошибка (порог не достигнут) | `failure_count += 1`, `last_used_at = now` |
+| другая ошибка (порог достигнут) | `failure_count += 1`, `cooldown_until = now + KEY_FAILURE_COOLDOWN_MS`, `last_used_at = now` |
 
 `failure_count += 1` выполняется атомарно в SQL, поэтому параллельные
 запросы не теряют инкременты.
@@ -477,6 +478,77 @@ docker compose exec postgres psql -U gateway -d llm_gateway -c \
 возможен last-write-wins для `cooldown_until`. Для учебного проекта
 это приемлемо; строгая версия потребовала бы версионирования
 или отдельной таблицы событий.
+
+### Circuit breaker ключей
+
+`429` и `401/403` — не единственные причины временно исключить ключ.
+Провайдер может отвечать `5xx`, не отвечать по таймауту или быть
+недоступным по сети. Повторять такие запросы одним и тем же ключом
+бессмысленно: это только увеличивает latency и шанс получить новый
+таймаут.
+
+`KeyPool` реализует circuit breaker на уровне API-ключа:
+
+- после `KEY_FAILURE_THRESHOLD` подряд ошибок (по умолчанию `3`)
+  ключ переходит в `cooldown`;
+- cooldown длится `KEY_FAILURE_COOLDOWN_MS` (по умолчанию `60_000`);
+- пока breaker открыт, `acquire()` не выдаёт ключ;
+- после истечения cooldown ключ снова доступен — это half-open;
+- если следующий запрос опять падает, breaker открывается сразу,
+  потому что `failure_count` уже выше порога;
+- успешный запрос сбрасывает `failure_count = 0` и закрывает breaker.
+
+Состояния:
+
+```text
+closed (active)
+   │ N ошибок подряд
+   ▼
+open (cooldown)
+   │ cooldown истёк
+   ▼
+half-open (active, failure_count сохранён)
+   ├── успех → closed
+   └── ошибка → open
+```
+
+Что считается ошибкой ключа:
+
+| Ошибка | Действие |
+|---|---|
+| `429` | отдельный cooldown по `cooldownMs`, breaker не нужен |
+| `401/403` | ключ помечается `invalid` |
+| timeout, `5xx`, network | `failure_count += 1`, при пороге — cooldown |
+| `400/422`, client disconnect | не считается ошибкой ключа |
+
+Важно: `400/422` и отмена клиентом — это не проблема ключа, поэтому
+они не приближают открытие breaker'а.
+
+Настройки:
+
+```env
+KEY_FAILURE_THRESHOLD=3
+KEY_FAILURE_COOLDOWN_MS=60000
+```
+
+Посмотреть, у каких ключей открыт breaker:
+
+```sh
+docker compose exec postgres psql -U gateway -d llm_gateway -c \
+  "select key_hint, failure_count, cooldown_until from api_keys where cooldown_until is not null order by cooldown_until;"
+```
+
+Принудительно закрыть все breaker'ы:
+
+```sh
+docker compose exec postgres psql -U gateway -d llm_gateway -c \
+  "update api_keys set cooldown_until = null, failure_count = 0;"
+```
+
+Ограничение: состояние breaker'а хранится в памяти `KeyPool` и
+восстанавливается из `api_keys` при старте. В multi-instance
+развёртывании у каждого процесса будет своё представление о cooldown;
+для production нужен Redis или атомарные обновления в БД.
 
 Чтобы запрос дошёл до OpenRouter, в БД должны быть:
 
@@ -568,5 +640,5 @@ deepseek/deepseek-r1:free
 - [x] Сохранение состояния ключей (cooldown, last_used_at) в БД
 - [x] Streaming (SSE): адаптер, Router и HTTP-слой
 - [x] Расчёт стоимости запросов (`cost_micros`)
-- [ ] Circuit breaker
+- [x] Circuit breaker ключей
 - [ ] Demo/admin-консоль

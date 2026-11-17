@@ -20,7 +20,12 @@ const logger = createLogger(env);
 const database = createDatabase(env);
 
 const apiKeys = createApiKeyRepository(database.db, env.ENCRYPTION_KEY);
-const pools = new PoolRegistry((providerId) => apiKeys.createPool(providerId));
+const pools = new PoolRegistry((providerId) =>
+  apiKeys.createPool(providerId, {
+    failureThreshold: env.KEY_FAILURE_THRESHOLD,
+    failureCooldownMs: env.KEY_FAILURE_COOLDOWN_MS,
+  }),
+);
 const routes = createRouteRepository(database.db);
 const clients = createClientRepository(database.db);
 const authenticateClient = createClientAuthenticator(clients);

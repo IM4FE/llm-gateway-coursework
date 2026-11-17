@@ -118,6 +118,8 @@ const TERMINAL_ERRORS: ReadonlySet<GatewayError['code']> = new Set([
  *
  * - 429 / 401 / 403 — проблема ключа: попробовать следующий ключ;
  * - timeout / 5xx / network — проблема deployment'а: перейти к следующему;
+ * - серия таких ошибок открывает circuit breaker ключа: ключ уходит
+ *   в cooldown и временно не выдаётся из пула;
  * - 400 / отмена клиентом — повторять бессмысленно: остановиться.
  *
  * Router не работает с HTTP и не пишет в БД. Он возвращает нормализованный
@@ -248,16 +250,16 @@ export class Router {
             latencyMs: Math.round(performance.now() - attemptStartedAt),
           });
 
+          if (TERMINAL_ERRORS.has(gatewayError.code)) {
+            throw gatewayError;
+          }
+
           this.reportKeyFailure(
             deployment.keyPool,
             key.id,
             gatewayError,
             Date.now(),
           );
-
-          if (TERMINAL_ERRORS.has(gatewayError.code)) {
-            throw gatewayError;
-          }
 
           if (KEY_SPECIFIC_ERRORS.has(gatewayError.code)) {
             // Проблема конкретного ключа: следующий acquire() выдаст
@@ -367,16 +369,16 @@ export class Router {
             latencyMs: Math.round(performance.now() - attemptStartedAt),
           });
 
+          if (TERMINAL_ERRORS.has(gatewayError.code)) {
+            throw gatewayError;
+          }
+
           this.reportKeyFailure(
             deployment.keyPool,
             key.id,
             gatewayError,
             Date.now(),
           );
-
-          if (TERMINAL_ERRORS.has(gatewayError.code)) {
-            throw gatewayError;
-          }
 
           if (KEY_SPECIFIC_ERRORS.has(gatewayError.code)) {
             continue;
@@ -488,13 +490,18 @@ export class Router {
           at: now,
         });
         return;
-      default:
-        keyPool.reportFailure(keyId);
+      default: {
+        const result = keyPool.reportFailure(keyId, now);
+
         reportKeyState(this.onKeyState, {
           keyId,
           type: 'failure',
           at: now,
+          ...(result.cooldownUntil !== undefined
+            ? { cooldownUntil: result.cooldownUntil }
+            : {}),
         });
+      }
     }
   }
 }

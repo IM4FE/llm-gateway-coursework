@@ -27,6 +27,17 @@ const envSchema = z.object({
   OPENROUTER_API_KEY: z.string().optional(),
   OPENROUTER_REFERER: z.string().url().optional(),
   OPENROUTER_TITLE: z.string().optional(),
+
+  /**
+   * Circuit breaker ключа: после стольких подряд ошибок ключ
+   * исключается из пула на KEY_FAILURE_COOLDOWN_MS миллисекунд.
+   */
+  KEY_FAILURE_THRESHOLD: z.coerce.number().int().positive().default(3),
+  KEY_FAILURE_COOLDOWN_MS: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .default(60_000),
 });
 
 export type Env = z.infer<typeof envSchema>;

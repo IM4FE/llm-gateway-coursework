@@ -33,6 +33,8 @@ const testEnv: Env = {
   ADMIN_TOKEN: '0123456789abcdef',
   ENCRYPTION_KEY: Buffer.alloc(32, 1).toString('base64'),
   OPENROUTER_BASE_URL: 'https://openrouter.ai/api/v1',
+  KEY_FAILURE_THRESHOLD: 3,
+  KEY_FAILURE_COOLDOWN_MS: 60_000,
 };
 
 const testClient: AuthenticatedClient = {

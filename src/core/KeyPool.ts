@@ -1,5 +1,29 @@
 export type KeyState = 'active' | 'cooldown' | 'invalid';
 
+export interface KeyPoolOptions {
+  /**
+   * Сколько подряд ошибок ключа (кроме 429/401/403) нужно,
+   * чтобы открыть circuit breaker и отправить ключ в cooldown.
+   */
+  failureThreshold?: number;
+  /**
+   * На сколько миллисекунд ключ исключается после открытия breaker'а.
+   */
+  failureCooldownMs?: number;
+}
+
+export interface KeyFailureResult {
+  failureCount: number;
+  /**
+   * Заполняется, если breaker открылся: до какого момента
+   * ключ не будет выдаваться.
+   */
+  cooldownUntil?: number;
+}
+
+const DEFAULT_FAILURE_THRESHOLD = 3;
+const DEFAULT_FAILURE_COOLDOWN_MS = 60_000;
+
 export interface KeyPoolEntry {
   id: string;
   value: string;
@@ -50,9 +74,34 @@ export interface KeyPoolSnapshot {
  */
 export class KeyPool {
   private readonly keys: ProviderKey[];
+  private readonly failureThreshold: number;
+  private readonly failureCooldownMs: number;
   private cursor = 0;
 
-  constructor(entries: ReadonlyArray<KeyPoolEntry>, now: number = Date.now()) {
+  constructor(
+    entries: ReadonlyArray<KeyPoolEntry>,
+    now: number = Date.now(),
+    options: KeyPoolOptions = {},
+  ) {
+    this.failureThreshold =
+      options.failureThreshold ?? DEFAULT_FAILURE_THRESHOLD;
+    this.failureCooldownMs =
+      options.failureCooldownMs ?? DEFAULT_FAILURE_COOLDOWN_MS;
+
+    if (
+      !Number.isInteger(this.failureThreshold) ||
+      this.failureThreshold < 1
+    ) {
+      throw new Error('failureThreshold must be a positive integer');
+    }
+
+    if (
+      !Number.isInteger(this.failureCooldownMs) ||
+      this.failureCooldownMs < 0
+    ) {
+      throw new Error('failureCooldownMs must be a non-negative integer');
+    }
+
     const ids = new Set<string>();
 
     for (const entry of entries) {
@@ -156,12 +205,35 @@ export class KeyPool {
   }
 
   /**
-   * Увеличивает счётчик ошибок, не меняя состояние ключа.
-   * Пригодится для circuit breaker и аналитики.
+   * Увеличивает счётчик ошибок ключа и открывает circuit breaker,
+   * когда достигнут порог.
+   *
+   * Пока breaker открыт, ключ находится в состоянии `cooldown`
+   * и не выдаётся из пула. После истечения cooldown ключ снова
+   * становится активным: это half-open-состояние. Если следующий
+   * запрос снова завершится ошибкой, счётчик уже выше порога,
+   * поэтому breaker мгновенно откроется ещё раз. Успех сбрасывает
+   * `failureCount` и закрывает breaker.
    */
-  reportFailure(keyId: string): void {
+  reportFailure(
+    keyId: string,
+    now: number = Date.now(),
+  ): KeyFailureResult {
     const key = this.getKey(keyId);
+
     key.failureCount += 1;
+
+    if (key.failureCount >= this.failureThreshold) {
+      key.state = 'cooldown';
+      key.cooldownUntil = now + this.failureCooldownMs;
+
+      return {
+        failureCount: key.failureCount,
+        cooldownUntil: key.cooldownUntil,
+      };
+    }
+
+    return { failureCount: key.failureCount };
   }
 
   /**

@@ -157,6 +157,79 @@ describe('KeyPool', () => {
     expect(key?.failureCount).toBe(2);
   });
 
+  it('opens the circuit after the default failure threshold', () => {
+    const pool = new KeyPool([entry('a'), entry('b')], T0);
+
+    expect(pool.reportFailure('a', T0)).toEqual({ failureCount: 1 });
+    expect(pool.reportFailure('a', T0)).toEqual({ failureCount: 2 });
+    expect(pool.snapshot(T0).keys[0]?.state).toBe('active');
+
+    const result = pool.reportFailure('a', T0);
+
+    expect(result).toEqual({
+      failureCount: 3,
+      cooldownUntil: T0 + 60_000,
+    });
+    expect(pool.snapshot(T0).keys[0]).toMatchObject({
+      state: 'cooldown',
+      failureCount: 3,
+      cooldownUntil: T0 + 60_000,
+    });
+    expect(pool.acquire(T0)?.id).toBe('b');
+  });
+
+  it('reopens after a half-open failure and closes on success', () => {
+    const pool = new KeyPool([entry('a')], T0, {
+      failureThreshold: 2,
+      failureCooldownMs: 1_000,
+    });
+
+    pool.reportFailure('a', T0);
+    pool.reportFailure('a', T0);
+
+    expect(pool.acquire(T0)).toBeNull();
+    expect(pool.acquire(T0 + 1_000)?.id).toBe('a');
+    expect(pool.snapshot(T0 + 1_000).keys[0]).toMatchObject({
+      state: 'active',
+      failureCount: 2,
+    });
+
+    const reopened = pool.reportFailure('a', T0 + 1_000);
+
+    expect(reopened.cooldownUntil).toBe(T0 + 2_000);
+    expect(pool.acquire(T0 + 1_000)).toBeNull();
+
+    expect(pool.acquire(T0 + 2_000)?.id).toBe('a');
+
+    pool.reportSuccess('a', T0 + 2_100);
+
+    expect(pool.snapshot(T0 + 2_100).keys[0]).toMatchObject({
+      state: 'active',
+      failureCount: 0,
+      cooldownUntil: null,
+    });
+  });
+
+  it('supports a custom failure threshold and cooldown', () => {
+    const pool = new KeyPool([entry('a')], T0, {
+      failureThreshold: 2,
+      failureCooldownMs: 5_000,
+    });
+
+    expect(pool.reportFailure('a', T0).cooldownUntil).toBeUndefined();
+    expect(pool.reportFailure('a', T0).cooldownUntil).toBe(T0 + 5_000);
+  });
+
+  it('rejects invalid circuit breaker options', () => {
+    expect(
+      () => new KeyPool([entry('a')], T0, { failureThreshold: 0 }),
+    ).toThrow('failureThreshold must be a positive integer');
+
+    expect(
+      () => new KeyPool([entry('a')], T0, { failureCooldownMs: -1 }),
+    ).toThrow('failureCooldownMs must be a non-negative integer');
+  });
+
   it('increments usage count and records lastUsedAt on acquire', () => {
     const pool = new KeyPool([entry('a')]);
 

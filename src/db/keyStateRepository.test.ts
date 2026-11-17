@@ -118,6 +118,27 @@ describe('createKeyStateRepository', () => {
     expect(set.failureCount).toBeDefined();
   });
 
+  it('stores cooldown when the key circuit opens', async () => {
+    const fake = makeFakeDatabase();
+    const repository = createKeyStateRepository(fake.db);
+
+    await repository.record({
+      keyId: 'key-1',
+      type: 'failure',
+      at: T0,
+      cooldownUntil: T0 + 60_000,
+    });
+
+    const set = fake.updates[0]!.set;
+
+    expect(set).toMatchObject({
+      cooldownUntil: new Date(T0 + 60_000),
+      lastUsedAt: new Date(T0),
+      updatedAt: new Date(T0),
+    });
+    expect(set.failureCount).toBeDefined();
+  });
+
   it('propagates database errors', async () => {
     const fake = makeFakeDatabase({
       error: new Error('connection refused'),

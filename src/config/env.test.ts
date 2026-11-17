@@ -21,6 +21,24 @@ describe('parseEnv', () => {
     expect(env.OPENROUTER_BASE_URL).toBe('https://openrouter.ai/api/v1');
   });
 
+  it('uses default circuit breaker settings', () => {
+    const env = parseEnv(validEnvironment);
+
+    expect(env.KEY_FAILURE_THRESHOLD).toBe(3);
+    expect(env.KEY_FAILURE_COOLDOWN_MS).toBe(60_000);
+  });
+
+  it('coerces circuit breaker settings', () => {
+    const env = parseEnv({
+      ...validEnvironment,
+      KEY_FAILURE_THRESHOLD: '5',
+      KEY_FAILURE_COOLDOWN_MS: '120000',
+    });
+
+    expect(env.KEY_FAILURE_THRESHOLD).toBe(5);
+    expect(env.KEY_FAILURE_COOLDOWN_MS).toBe(120_000);
+  });
+
   it('rejects a short admin token', () => {
     expect(() => parseEnv({ ...validEnvironment, ADMIN_TOKEN: 'short' })).toThrow(
       /ADMIN_TOKEN/,
