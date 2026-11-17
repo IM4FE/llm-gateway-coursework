@@ -28,7 +28,7 @@ export function RequestsPage() {
       <Card description="Нажмите на request id, чтобы увидеть все попытки и fallback-цепочку.">
         {requests.length === 0 ? (
           <EmptyState
-            description="Отправьте первый запрос через playground или API."
+            description="Отправьте первый запрос через песочницу или API."
             title="Журнал пуст"
           />
         ) : (

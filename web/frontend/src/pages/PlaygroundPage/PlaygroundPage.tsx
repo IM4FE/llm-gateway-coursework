@@ -52,6 +52,53 @@ function extractProvider(payload: unknown): string | null {
   return payload.provider
 }
 
+const BACKEND_HINT = 'Проверьте, что backend запущен на http://localhost:3000.'
+
+interface ResponseBody {
+  payload: unknown
+  raw: string
+}
+
+async function readBody(response: Response): Promise<ResponseBody> {
+  const raw = await response.text()
+
+  if (raw.trim() === '') {
+    return { payload: null, raw }
+  }
+
+  try {
+    return { payload: JSON.parse(raw), raw }
+  } catch {
+    return { payload: null, raw }
+  }
+}
+
+function describeFailure(response: Response, body: ResponseBody): string {
+  const apiMessage = extractError(body.payload)
+
+  if (apiMessage !== null) {
+    return apiMessage
+  }
+
+  if (body.raw.trim() === '') {
+    return `Шлюз не вернул тело ответа (HTTP ${response.status}). ${BACKEND_HINT}`
+  }
+
+  if (body.payload === null) {
+    return `Шлюз ответил HTTP ${response.status}, но тело ответа не JSON. ${BACKEND_HINT}`
+  }
+
+  return `Шлюз ответил HTTP ${response.status}.`
+}
+
+function describeNetworkError(caught: unknown): string {
+  if (caught instanceof TypeError) {
+    return `Не удалось соединиться со шлюзом. ${BACKEND_HINT}`
+  }
+
+  return caught instanceof Error ? caught.message : 'Не удалось выполнить запрос.'
+}
+
 const MODEL_ALIASES = [...new Set(modelRoutes.map((route) => route.alias))]
 
 export function PlaygroundPage() {
@@ -91,15 +138,21 @@ export function PlaygroundPage() {
           messages: [{ role: 'user', content: prompt }],
         }),
       })
-      const payload: unknown = await response.json()
+      const body = await readBody(response)
 
       if (!response.ok) {
-        setError(extractError(payload) ?? `HTTP ${response.status}`)
+        setError(describeFailure(response, body))
 
         return
       }
 
-      const content = extractContent(payload)
+      if (body.raw.trim() === '') {
+        setError(`Шлюз вернул пустой ответ (HTTP ${response.status}). ${BACKEND_HINT}`)
+
+        return
+      }
+
+      const content = extractContent(body.payload)
 
       if (content === null) {
         setError('Ответ не содержит choices[0].message.content.')
@@ -108,9 +161,9 @@ export function PlaygroundPage() {
       }
 
       setAnswer(content)
-      setProvider(extractProvider(payload))
+      setProvider(extractProvider(body.payload))
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Не удалось выполнить запрос.')
+      setError(describeNetworkError(caught))
     } finally {
       setLoading(false)
     }
@@ -120,8 +173,8 @@ export function PlaygroundPage() {
     <Stack gap={3}>
       <PageHeader
         description="Отправьте запрос в запущенный backend через Vite proxy. Ключ хранится только в состоянии страницы."
-        eyebrow="Playground"
-        title="Playground"
+        eyebrow="Тест API"
+        title="Песочница"
       />
 
       <Grid container spacing={2}>

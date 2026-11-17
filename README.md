@@ -58,7 +58,7 @@ npm run dev
 нужен только для первой проверки.
 
 Откройте `http://localhost:5173`. Vite проксирует запросы `/v1` на
-`http://localhost:3000`, поэтому playground работает без CORS.
+`http://localhost:3000`, поэтому песочница работает без CORS.
 
 Проверки обоих frontend-проектов:
 
@@ -84,9 +84,9 @@ npm run lint && npm run test:coverage && npm run build
 
 ![Детали провайдера](docs/screenshots/provider-details.png)
 
-Playground для реального запроса через backend:
+Песочница для реального запроса через backend:
 
-![Playground](docs/screenshots/playground.png)
+![Песочница](docs/screenshots/playground.png)
 
 Журнал запросов:
 

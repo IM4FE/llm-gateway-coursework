@@ -28,7 +28,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/providers', label: 'Провайдеры', icon: <DnsOutlinedIcon fontSize="small" /> },
   { to: '/models', label: 'Маршруты', icon: <SwapHorizOutlinedIcon fontSize="small" /> },
   { to: '/requests', label: 'Запросы', icon: <ReceiptLongOutlinedIcon fontSize="small" /> },
-  { to: '/playground', label: 'Playground', icon: <PlayCircleOutlineIcon fontSize="small" /> },
+  { to: '/playground', label: 'Песочница', icon: <PlayCircleOutlineIcon fontSize="small" /> },
   { to: '/settings', label: 'Настройки', icon: <SettingsOutlinedIcon fontSize="small" /> },
 ]
 
@@ -134,7 +134,7 @@ export function AppLayout() {
             </Box>
             <Stack alignItems="center" direction="row" gap={2}>
               <Link component={RouterLink} to="/playground" underline="hover" variant="body2">
-                Playground
+                Песочница
               </Link>
               {isAuthenticated ? (
                 <Button color="inherit" onClick={signOut} size="small">

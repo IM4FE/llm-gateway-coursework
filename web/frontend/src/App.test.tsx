@@ -71,10 +71,10 @@ describe('App routing', () => {
     expect(screen.getByRole('link', { name: request.requestId })).toBeInTheDocument()
   })
 
-  it('opens the playground', () => {
+  it('opens the sandbox', () => {
     renderApp(['/playground'])
 
-    expect(screen.getByRole('heading', { name: 'Playground' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Песочница' })).toBeInTheDocument()
     expect(screen.getByLabelText('Alias модели')).toBeInTheDocument()
   })
 

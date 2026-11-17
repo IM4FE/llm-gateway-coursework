@@ -35,7 +35,7 @@ export function DashboardPage() {
       <PageHeader
         actions={
           <Link component={RouterLink} to="/playground" underline="hover">
-            Открыть playground →
+            Открыть песочницу →
           </Link>
         }
         description="Состояние шлюза, маршрутов и последних запросов. Данные на этой странице — mock-снимок для каркаса интерфейса."
