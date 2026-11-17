@@ -1,0 +1,35 @@
+.empty {
+  align-items: center;
+  border: 1px dashed var(--ui-border-strong, rgba(148, 163, 184, 0.34));
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 32px 24px;
+  text-align: center;
+}
+
+.icon {
+  color: var(--ui-muted, #9aa8c7);
+  font-size: 28px;
+  line-height: 1;
+}
+
+.title {
+  color: var(--ui-text, #e5ecff);
+  font-size: 16px;
+  font-weight: 650;
+  margin: 0;
+}
+
+.description {
+  color: var(--ui-muted, #9aa8c7);
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0;
+  max-width: 460px;
+}
+
+.action {
+  margin-top: 8px;
+}

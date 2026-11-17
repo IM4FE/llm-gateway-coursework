@@ -14,6 +14,84 @@
 - Pino
 - Vitest
 
+## Веб-консоль
+
+В репозитории три самостоятельных проекта:
+
+- **backend** — Fastify-шлюз в корне репозитория;
+- **frontend** — React-консоль в `web/frontend`;
+- **ui-library** — библиотека общих компонентов в `web/ui-library`.
+
+Подробная структура, список библиотек и роутинг описаны в
+[`architecture.md`](architecture.md). Границы MVP и use case — в
+[`mvp.md`](mvp.md).
+
+### Запуск веб-консоли
+
+Сначала запустите backend по инструкции ниже. Затем установите
+зависимости и соберите библиотеку:
+
+```sh
+cd web/ui-library
+npm install
+npm run build
+```
+
+После этого запустите frontend:
+
+```sh
+cd ../frontend
+npm install
+npm run dev
+```
+
+Откройте `http://localhost:5173`. Vite проксирует запросы `/v1` на
+`http://localhost:3000`, поэтому playground работает без CORS.
+
+Проверки обоих frontend-проектов:
+
+```sh
+cd web/ui-library
+npm run lint && npm run test:coverage && npm run build
+
+cd ../frontend
+npm run lint && npm run test:coverage && npm run build
+```
+
+### Скриншоты
+
+Панель управления с mock-снимком состояния шлюза:
+
+![Панель управления](docs/screenshots/dashboard.png)
+
+Список провайдеров:
+
+![Провайдеры](docs/screenshots/providers.png)
+
+Детали провайдера с параметром маршрута:
+
+![Детали провайдера](docs/screenshots/provider-details.png)
+
+Playground для реального запроса через backend:
+
+![Playground](docs/screenshots/playground.png)
+
+Журнал запросов:
+
+![Запросы](docs/screenshots/requests.png)
+
+Детали запроса и fallback-попытки:
+
+![Детали запроса](docs/screenshots/request-details.png)
+
+Защищённый раздел настроек:
+
+![Настройки](docs/screenshots/settings.png)
+
+> Скриншоты сделаны на каркасе с mock-данными. Реальные провайдеры,
+> ключи и журнал будут подключены через admin API в следующих
+> инкрементах.
+
 ## Быстрый старт
 
 ```sh
@@ -586,7 +664,9 @@ src/
 ├── routes/          # HTTP-маршруты, резолвер и сборка deployment'ов
 ├── app.ts           # сборка Fastify-приложения
 └── index.ts         # точка входа
-web/                 # будущая demo/admin-консоль (React)
+web/
+├── frontend/        # React admin console
+└── ui-library/      # библиотека общих компонентов
 docs/                # пояснения и проектная документация
 ```
 
@@ -617,7 +697,8 @@ deepseek/deepseek-r1:free
 ## Документация
 
 - [Как работает SSE и streaming](docs/streaming.md)
-- [План и архитектурные решения](docs/architecture.md) — в следующем шаге
+- [Архитектура проекта](architecture.md)
+- [Границы MVP и use case](mvp.md)
 
 ## Текущий статус
 
@@ -641,4 +722,4 @@ deepseek/deepseek-r1:free
 - [x] Streaming (SSE): адаптер, Router и HTTP-слой
 - [x] Расчёт стоимости запросов (`cost_micros`)
 - [x] Circuit breaker ключей
-- [ ] Demo/admin-консоль
+- [x] Веб-консоль: React frontend и библиотека общих компонентов
