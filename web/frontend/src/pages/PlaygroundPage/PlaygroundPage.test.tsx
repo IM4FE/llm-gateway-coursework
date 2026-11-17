@@ -59,6 +59,21 @@ describe('PlaygroundPage', () => {
       '/v1/chat/completions',
       expect.objectContaining({ method: 'POST' }),
     )
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit
+    const body: unknown = JSON.parse(String(request.body))
+
+    expect(body).toEqual({
+      model: 'fast-model',
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Отвечай на русском языке, если пользователь не попросил ответить на другом языке.',
+        },
+        { role: 'user', content: 'Объясни в двух предложениях, что делает circuit breaker в LLM-шлюзе.' },
+      ],
+    })
   })
 
   it('renders a gateway error message from the API payload', async () => {

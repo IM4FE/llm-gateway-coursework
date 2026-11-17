@@ -88,6 +88,11 @@ npm run lint && npm run test:coverage && npm run build
 
 ![Песочница](docs/screenshots/playground.png)
 
+Песочница отправляет запрос вместе с system-сообщением «Отвечай на
+русском языке, если пользователь не попросил ответить на другом языке»,
+поэтому ответ модели приходит по-русски. Backend принимает роли
+`system`, `user` и `assistant`.
+
 Журнал запросов:
 
 ![Запросы](docs/screenshots/requests.png)

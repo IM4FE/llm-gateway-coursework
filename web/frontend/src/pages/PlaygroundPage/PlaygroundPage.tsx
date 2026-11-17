@@ -101,6 +101,9 @@ function describeNetworkError(caught: unknown): string {
 
 const MODEL_ALIASES = [...new Set(modelRoutes.map((route) => route.alias))]
 
+const SYSTEM_PROMPT =
+  'Отвечай на русском языке, если пользователь не попросил ответить на другом языке.'
+
 export function PlaygroundPage() {
   const [model, setModel] = useState(MODEL_ALIASES[0] ?? 'fast-model')
   const [apiKey, setApiKey] = useState('')
@@ -135,7 +138,10 @@ export function PlaygroundPage() {
         },
         body: JSON.stringify({
           model,
-          messages: [{ role: 'user', content: prompt }],
+          messages: [
+            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'user', content: prompt },
+          ],
         }),
       })
       const body = await readBody(response)
@@ -216,6 +222,10 @@ export function PlaygroundPage() {
                 onChange={(event) => setPrompt(event.target.value)}
                 value={prompt}
               />
+
+              <Typography color="text.secondary" variant="caption">
+                Запрос уходит с system-сообщением «{SYSTEM_PROMPT}»
+              </Typography>
 
               <Button fullWidth loading={loading} type="submit">
                 Отправить запрос
