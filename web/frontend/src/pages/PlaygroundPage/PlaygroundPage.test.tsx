@@ -24,7 +24,7 @@ describe('PlaygroundPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'Отправить запрос' }))
 
-    expect(screen.getByRole('alert')).toHaveTextContent('Введите клиентский ключ')
+    expect(screen.getByText('Введите клиентский ключ, созданный командой npm run db:create-client.')).toBeInTheDocument()
   })
 
   it('renders a successful gateway answer', async () => {
@@ -68,6 +68,6 @@ describe('PlaygroundPage', () => {
     await user.type(screen.getByLabelText('Клиентский ключ'), 'lgw_test')
     await user.click(screen.getByRole('button', { name: 'Отправить запрос' }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('All providers failed')
+    expect(await screen.findByText('All providers failed')).toBeInTheDocument()
   })
 })

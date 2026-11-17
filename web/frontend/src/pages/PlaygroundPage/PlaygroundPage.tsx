@@ -1,6 +1,15 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 
+import Alert from '@mui/material/Alert'
+import Box from '@mui/material/Box'
+import Grid from '@mui/material/Grid'
+import MenuItem from '@mui/material/MenuItem'
+import Paper from '@mui/material/Paper'
+import Stack from '@mui/material/Stack'
+import TextField from '@mui/material/TextField'
+import Typography from '@mui/material/Typography'
+
 import { Button, Card, PageHeader, StatusBadge } from '@llm-gateway/ui'
 
 import { modelRoutes } from '../../data/mockData'
@@ -48,7 +57,9 @@ const MODEL_ALIASES = [...new Set(modelRoutes.map((route) => route.alias))]
 export function PlaygroundPage() {
   const [model, setModel] = useState(MODEL_ALIASES[0] ?? 'fast-model')
   const [apiKey, setApiKey] = useState('')
-  const [prompt, setPrompt] = useState('Объясни в двух предложениях, что делает circuit breaker в LLM-шлюзе.')
+  const [prompt, setPrompt] = useState(
+    'Объясни в двух предложениях, что делает circuit breaker в LLM-шлюзе.',
+  )
   const [answer, setAnswer] = useState<string | null>(null)
   const [provider, setProvider] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -106,89 +117,102 @@ export function PlaygroundPage() {
   }
 
   return (
-    <div className="page">
+    <Stack gap={3}>
       <PageHeader
         description="Отправьте запрос в запущенный backend через Vite proxy. Ключ хранится только в состоянии страницы."
         eyebrow="Playground"
         title="Playground"
       />
 
-      <div className="page-grid">
-        <Card description="POST /v1/chat/completions" title="Запрос">
-          <form className="form" onSubmit={handleSubmit}>
-            <div className="field">
-              <label htmlFor="playground-model">Alias модели</label>
-              <select
-                className="select"
+      <Grid container spacing={2}>
+        <Grid size={{ xs: 12, lg: 6 }}>
+          <Card description="POST /v1/chat/completions" title="Запрос">
+            <Stack component="form" gap={2} onSubmit={handleSubmit}>
+              <TextField
+                fullWidth
                 id="playground-model"
+                label="Alias модели"
                 onChange={(event) => setModel(event.target.value)}
+                select
                 value={model}
               >
                 {MODEL_ALIASES.map((alias) => (
-                  <option key={alias} value={alias}>
+                  <MenuItem key={alias} value={alias}>
                     {alias}
-                  </option>
+                  </MenuItem>
                 ))}
-              </select>
-            </div>
+              </TextField>
 
-            <div className="field">
-              <label htmlFor="playground-key">Клиентский ключ</label>
-              <input
+              <TextField
                 autoComplete="off"
-                className="input"
+                fullWidth
                 id="playground-key"
+                label="Клиентский ключ"
                 onChange={(event) => setApiKey(event.target.value)}
                 placeholder="lgw_..."
                 type="password"
                 value={apiKey}
               />
-            </div>
 
-            <div className="field">
-              <label htmlFor="playground-prompt">Сообщение</label>
-              <textarea
-                className="textarea"
+              <TextField
+                fullWidth
                 id="playground-prompt"
+                label="Сообщение"
+                minRows={5}
+                multiline
                 onChange={(event) => setPrompt(event.target.value)}
                 value={prompt}
               />
-            </div>
 
-            <Button fullWidth loading={loading} type="submit">
-              Отправить запрос
-            </Button>
-          </form>
-        </Card>
+              <Button fullWidth loading={loading} type="submit">
+                Отправить запрос
+              </Button>
+            </Stack>
+          </Card>
+        </Grid>
 
-        <Card
-          actions={provider !== null ? <StatusBadge tone="success">{provider}</StatusBadge> : null}
-          description="Ответ шлюза или текст ошибки."
-          title="Ответ"
-        >
-          {error !== null ? (
-            <div className="alert alert-error" role="alert">
-              {error}
-            </div>
-          ) : null}
+        <Grid size={{ xs: 12, lg: 6 }}>
+          <Card
+            actions={provider !== null ? <StatusBadge tone="success">{provider}</StatusBadge> : undefined}
+            description="Ответ шлюза или текст ошибки."
+            title="Ответ"
+          >
+            <Stack gap={2}>
+              {error !== null ? <Alert severity="error">{error}</Alert> : null}
 
-          {answer !== null ? (
-            <div className="result">{answer}</div>
-          ) : null}
+              {answer !== null ? (
+                <Paper sx={{ bgcolor: 'action.hover', p: 2, whiteSpace: 'pre-wrap' }} variant="outlined">
+                  <Typography variant="body2">{answer}</Typography>
+                </Paper>
+              ) : null}
 
-          {error === null && answer === null ? (
-            <div className="empty-note">
-              Заполните ключ и нажмите «Отправить запрос». Для работы нужен
-              backend на <code>http://localhost:3000</code>.
-            </div>
-          ) : null}
-        </Card>
-      </div>
+              {error === null && answer === null ? (
+                <Box
+                  sx={{
+                    border: 1,
+                    borderColor: 'divider',
+                    borderRadius: 2,
+                    borderStyle: 'dashed',
+                    color: 'text.secondary',
+                    p: 3,
+                    textAlign: 'center',
+                  }}
+                >
+                  <Typography variant="body2">
+                    Заполните ключ и нажмите «Отправить запрос». Для работы нужен backend на{' '}
+                    <Box component="code">http://localhost:3000</Box>.
+                  </Typography>
+                </Box>
+              ) : null}
+            </Stack>
+          </Card>
+        </Grid>
+      </Grid>
 
-      <div className="alert alert-info">
-        Vite dev-сервер проксирует <code>/v1</code> на backend, поэтому CORS не
+      <Alert severity="info">
+        Vite dev-сервер проксирует <Box component="code">/v1</Box> на backend, поэтому CORS не
         требуется. В production тот же путь должен обслуживать reverse proxy.
-      </div>
-    </div>
+      </Alert>
+    </Stack>
   )
 }

@@ -13,6 +13,7 @@
 - Drizzle ORM
 - Pino
 - Vitest
+- React 19 + MUI 7 (Material UI) в веб-консоли
 
 ## Веб-консоль
 
@@ -21,6 +22,13 @@
 - **backend** — Fastify-шлюз в корне репозитория;
 - **frontend** — React-консоль в `web/frontend`;
 - **ui-library** — библиотека общих компонентов в `web/ui-library`.
+
+Интерфейс собран на [MUI](https://mui.com/material-ui/): тёмная тема
+описана в `web/frontend/src/theme.ts`, layout построен на `Drawer` и
+`AppBar`, таблицы — на `Table`, формы — на `TextField`. Библиотека
+`@llm-gateway/ui` — это обёртки над MUI (`Button`, `Card`,
+`StatusBadge`, `PageHeader`, `StatCard`, `EmptyState`), поэтому обе
+части приложения выглядят одинаково.
 
 Подробная структура, список библиотек и роутинг описаны в
 [`architecture.md`](architecture.md). Границы MVP и use case — в
@@ -44,6 +52,10 @@ cd ../frontend
 npm install
 npm run dev
 ```
+
+Команды `dev`, `build` и `test` frontend сами пересобирают библиотеку
+через `predev`, `prebuild` и `pretest`, поэтому отдельный `npm run build`
+нужен только для первой проверки.
 
 Откройте `http://localhost:5173`. Vite проксирует запросы `/v1` на
 `http://localhost:3000`, поэтому playground работает без CORS.
@@ -88,10 +100,10 @@ Playground для реального запроса через backend:
 
 ![Настройки](docs/screenshots/settings.png)
 
-> Скриншоты сделаны на каркасе с mock-данными. Реальные провайдеры,
-> ключи и журнал будут подключены через admin API в следующих
-> инкрементах.
-
+> Скриншоты сделаны на каркасе с mock-данными. Интерфейс построен на
+> MUI 7 с тёмной темой, компоненты взяты из `@llm-gateway/ui`. Реальные
+> провайдеры, ключи и журнал будут подключены через admin API в
+> следующих инкрементах.
 ## Быстрый старт
 
 ```sh
@@ -723,3 +735,4 @@ deepseek/deepseek-r1:free
 - [x] Расчёт стоимости запросов (`cost_micros`)
 - [x] Circuit breaker ключей
 - [x] Веб-консоль: React frontend и библиотека общих компонентов
+- [x] Интерфейс на MUI 7: тёмная тема, Drawer/AppBar, таблицы и формы

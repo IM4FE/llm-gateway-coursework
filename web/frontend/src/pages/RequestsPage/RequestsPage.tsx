@@ -1,4 +1,15 @@
-import { Link } from 'react-router-dom'
+import Alert from '@mui/material/Alert'
+import Box from '@mui/material/Box'
+import Link from '@mui/material/Link'
+import Stack from '@mui/material/Stack'
+import Table from '@mui/material/Table'
+import TableBody from '@mui/material/TableBody'
+import TableCell from '@mui/material/TableCell'
+import TableContainer from '@mui/material/TableContainer'
+import TableHead from '@mui/material/TableHead'
+import TableRow from '@mui/material/TableRow'
+import Typography from '@mui/material/Typography'
+import { Link as RouterLink } from 'react-router-dom'
 
 import { Card, EmptyState, PageHeader, StatusBadge } from '@llm-gateway/ui'
 
@@ -7,7 +18,7 @@ import { formatDateTime, formatMicros, requestStatusTone } from '../../lib/forma
 
 export function RequestsPage() {
   return (
-    <div className="page">
+    <Stack gap={3}>
       <PageHeader
         description="Журнал запросов: alias, выбранный провайдер, стоимость и итоговый статус."
         eyebrow="Observability"
@@ -21,50 +32,59 @@ export function RequestsPage() {
             title="Журнал пуст"
           />
         ) : (
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th scope="col">Request id</th>
-                  <th scope="col">Модель</th>
-                  <th scope="col">Клиент</th>
-                  <th scope="col">Провайдер</th>
-                  <th scope="col">Статус</th>
-                  <th scope="col">Стоимость</th>
-                  <th scope="col">Время</th>
-                </tr>
-              </thead>
-              <tbody>
+          <TableContainer>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Request id</TableCell>
+                  <TableCell>Модель</TableCell>
+                  <TableCell>Клиент</TableCell>
+                  <TableCell>Провайдер</TableCell>
+                  <TableCell>Статус</TableCell>
+                  <TableCell>Стоимость</TableCell>
+                  <TableCell>Время</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
                 {requests.map((request) => (
-                  <tr key={request.id}>
-                    <td>
-                      <Link className="mono" to={`/requests/${request.id}`}>
+                  <TableRow key={request.id}>
+                    <TableCell>
+                      <Link
+                        component={RouterLink}
+                        sx={{ fontFamily: 'monospace', fontSize: 12 }}
+                        to={`/requests/${request.id}`}
+                        underline="hover"
+                      >
                         {request.requestId}
                       </Link>
-                    </td>
-                    <td className="mono">{request.model}</td>
-                    <td>{request.client}</td>
-                    <td>{request.provider}</td>
-                    <td>
-                      <StatusBadge tone={requestStatusTone(request.status)}>
-                        {request.status}
-                      </StatusBadge>
-                    </td>
-                    <td className="mono">{formatMicros(request.costMicros)}</td>
-                    <td className="muted">{formatDateTime(request.createdAt)}</td>
-                  </tr>
+                    </TableCell>
+                    <TableCell sx={{ fontFamily: 'monospace', fontSize: 12 }}>{request.model}</TableCell>
+                    <TableCell>{request.client}</TableCell>
+                    <TableCell>{request.provider}</TableCell>
+                    <TableCell>
+                      <StatusBadge tone={requestStatusTone(request.status)}>{request.status}</StatusBadge>
+                    </TableCell>
+                    <TableCell sx={{ fontFamily: 'monospace', fontSize: 12 }}>
+                      {formatMicros(request.costMicros)}
+                    </TableCell>
+                    <TableCell>
+                      <Typography color="text.secondary" variant="body2">
+                        {formatDateTime(request.createdAt)}
+                      </Typography>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </TableBody>
+            </Table>
+          </TableContainer>
         )}
       </Card>
 
-      <div className="alert alert-info">
-        Backend уже пишет <code>request_logs</code> и{' '}
-        <code>request_attempts</code>. Страница пока показывает mock-снимок;
+      <Alert severity="info">
+        Backend уже пишет <Box component="code">request_logs</Box> и{' '}
+        <Box component="code">request_attempts</Box>. Страница пока показывает mock-снимок;
         подключение к admin API — следующий шаг.
-      </div>
-    </div>
+      </Alert>
+    </Stack>
   )
 }

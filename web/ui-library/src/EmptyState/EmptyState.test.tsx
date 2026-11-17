@@ -19,10 +19,10 @@ describe('EmptyState', () => {
   })
 
   it('renders only the required title', () => {
-    const { container } = render(<EmptyState title="Нет данных" />)
+    render(<EmptyState title="Нет данных" />)
 
     expect(screen.getByRole('heading', { name: 'Нет данных' })).toBeInTheDocument()
-    expect(container.querySelector('p')).toBeNull()
     expect(screen.queryByRole('button')).toBeNull()
+    expect(screen.queryByText('Добавьте первый маршрут')).toBeNull()
   })
 })

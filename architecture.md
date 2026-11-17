@@ -13,8 +13,9 @@ OpenAI-совместимым API. Шлюз принимает запросы к
 Проект состоит из трёх самостоятельных пакетов:
 
 1. **Backend** — Fastify-приложение в корне репозитория.
-2. **Frontend** — React-приложение `web/frontend`.
-3. **UI library** — библиотека общих компонентов `web/ui-library`.
+2. **Frontend** — React + MUI-приложение `web/frontend`.
+3. **UI library** — библиотека общих компонентов `web/ui-library`
+   (обёртки над MUI).
 
 Такое разделение позволяет переиспользовать визуальные компоненты,
 независимо тестировать библиотеку и развивать backend без изменений
@@ -36,7 +37,7 @@ llm-gateway-coursework/
 ├── drizzle/                     # SQL-миграции
 ├── docs/                        # внутренняя документация backend
 ├── web/
-│   ├── frontend/                # основное React-приложение
+│   ├── frontend/                # основное React + MUI-приложение
 │   │   ├── src/
 │   │   │   ├── auth/            # контекст админ-сессии
 │   │   │   ├── components/      # AppLayout, SidebarNav, RequireAdmin
@@ -44,9 +45,9 @@ llm-gateway-coursework/
 │   │   │   ├── lib/             # форматирование
 │   │   │   ├── pages/           # страницы приложения
 │   │   │   ├── router/          # конфигурация маршрутов
-│   │   │   ├── styles/          # глобальные стили
 │   │   │   ├── App.tsx
-│   │   │   └── main.tsx
+│   │   │   ├── main.tsx
+│   │   │   └── theme.ts         # тёмная тема MUI
 │   │   ├── index.html
 │   │   ├── eslint.config.js
 │   │   ├── package.json
@@ -108,24 +109,27 @@ rate limiting, журналирование и расчёт стоимости.
 
 | Путь | Назначение |
 |---|---|
-| `src/main.tsx` | Точка входа React, монтирование в `#root` |
+| `src/main.tsx` | Точка входа React: `ThemeProvider`, `CssBaseline`, монтирование в `#root` |
+| `src/theme.ts` | Тёмная тема MUI: палитра, типографика, скругления, overrides |
 | `src/App.tsx` | `AdminAuthProvider` + `RouterProvider` |
 | `src/router/routes.tsx` | Декларативная конфигурация всех маршрутов |
-| `src/components/AppLayout/` | Каркас: sidebar, topbar, `Outlet` |
-| `src/components/SidebarNav/` | Навигация с `NavLink` и active-состоянием |
+| `src/components/AppLayout/` | Каркас на `Drawer` + `AppBar`: sidebar, topbar, `Outlet` |
+| `src/components/SidebarNav/` | Навигация на `ListItemButton` + `NavLink` с active-состоянием |
 | `src/components/RequireAdmin/` | Защита маршрутов, redirect на `/login` |
 | `src/auth/` | Контекст админ-сессии и `sessionStorage` |
 | `src/pages/` | Страницы приложения |
 | `src/data/` | Типы и mock-данные для каркаса |
 | `src/lib/format.ts` | Форматирование дат, micro-USD и статусов |
-| `src/styles/global.css` | Тема, layout, таблицы, формы, адаптивность |
+
+Стилей в CSS-файлах нет: вся вёрстка описана пропом `sx` и темой MUI,
+поэтому глобальный `src/styles/global.css` больше не нужен.
 
 **Компоненты frontend:**
 
 | Компонент | Назначение |
 |---|---|
-| `AppLayout` | Общий каркас с боковой навигацией и верхней панелью |
-| `SidebarNav` | Список навигационных ссылок |
+| `AppLayout` | Каркас на MUI `Drawer`/`AppBar` с боковой навигацией |
+| `SidebarNav` | Список навигационных ссылок на `ListItemButton` |
 | `RequireAdmin` | Проверка админ-сессии и redirect на логин |
 | `DashboardPage` | Сводка: провайдеры, маршруты, запросы, стоимость |
 | `ProvidersPage` | Список провайдеров |
@@ -141,32 +145,41 @@ rate limiting, журналирование и расчёт стоимости.
 ### 3.3 UI library (`web/ui-library`)
 
 **Назначение:** независимая библиотека переиспользуемых React-компонентов.
-Собирается в ESM-пакет `@llm-gateway/ui` с типами и отдельным CSS-файлом.
+Собирается в ESM-пакет `@llm-gateway/ui` с типами.
+
+Компоненты библиотеки — не самописные элементы с CSS-модулями, а тонкие
+обёртки над [`MUI`](https://mui.com/material-ui/). Библиотека задаёт
+семантические варианты (`variant="danger"`, `tone="warning"`) и
+маппит их на `@mui/material`, поэтому приложение получает единый
+дизайн-язык и доступность MUI «из коробки».
 
 **Структура:**
 
 ```text
 src/
-├── Button/          # Button.tsx, Button.module.css, Button.test.tsx
-├── Card/            # Card.tsx, Card.module.css, Card.test.tsx
-├── EmptyState/      # EmptyState.tsx, EmptyState.module.css, тест
-├── PageHeader/      # PageHeader.tsx, PageHeader.module.css, тест
-├── StatCard/        # StatCard.tsx, StatCard.module.css, тест
-├── StatusBadge/     # StatusBadge.tsx, StatusBadge.module.css, тест
+├── Button/          # Button.tsx, Button.test.tsx
+├── Card/            # Card.tsx, Card.test.tsx
+├── EmptyState/      # EmptyState.tsx, EmptyState.test.tsx
+├── PageHeader/      # PageHeader.tsx, PageHeader.test.tsx
+├── StatCard/        # StatCard.tsx, StatCard.test.tsx
+├── StatusBadge/     # StatusBadge.tsx, StatusBadge.test.tsx
 ├── index.ts         # публичные экспорты
 └── setupTests.ts    # jest-dom + cleanup
 ```
 
 **Компоненты библиотеки:**
 
-| Компонент | Назначение | Основные props |
-|---|---|---|
-| `Button` | Кнопка с вариантами и состоянием загрузки | `variant`, `size`, `loading`, `fullWidth` |
-| `Card` | Панель с заголовком, описанием и действиями | `title`, `description`, `actions`, `tone` |
-| `StatusBadge` | Компактный статус с цветовой индикацией | `tone`, `dot`, `children` |
-| `PageHeader` | Заголовок страницы с eyebrow и actions | `eyebrow`, `title`, `description`, `actions` |
-| `StatCard` | KPI-карточка | `label`, `value`, `hint`, `tone`, `icon` |
-| `EmptyState` | Пустое состояние с действием | `title`, `description`, `action` |
+| Компонент | База MUI | Назначение | Основные props |
+|---|---|---|---|
+| `Button` | `Button` + `CircularProgress` | Кнопка с вариантами и состоянием загрузки | `variant`, `size`, `loading`, `fullWidth` |
+| `Card` | `Card`, `CardHeader`, `CardContent` | Панель с заголовком, описанием и действиями | `title`, `description`, `actions`, `tone` |
+| `StatusBadge` | `Chip` | Компактный статус с цветовой индикацией | `tone`, `dot`, `children` |
+| `PageHeader` | `Stack`, `Typography` | Заголовок страницы с eyebrow и actions | `eyebrow`, `title`, `description`, `actions` |
+| `StatCard` | `Paper`, `Stack` | KPI-карточка | `label`, `value`, `hint`, `tone`, `icon` |
+| `EmptyState` | `Paper`, `Typography` | Пустое состояние с действием | `title`, `description`, `action` |
+
+Внешний вид обёрток задаётся пропом `sx`, поэтому отдельных
+CSS-модулей и экспорта `./style.css` у пакета нет.
 
 ## 4. Используемые библиотеки
 
@@ -192,6 +205,10 @@ src/
 | `react` | 19.3.1 | UI-библиотека |
 | `react-dom` | 19.3.1 | Рендеринг в DOM |
 | `react-router-dom` | 7.18.5 | Маршрутизация, `NavLink`, `Outlet`, параметры |
+| `@mui/material` | 7.3.11 | Компоненты Material UI: layout, таблицы, формы, тема |
+| `@mui/icons-material` | 7.3.11 | Иконки для sidebar и действий |
+| `@emotion/react` | 11.14.0 | Движок стилей MUI (peer) |
+| `@emotion/styled` | 11.14.1 | Styled-API MUI (peer) |
 | `@llm-gateway/ui` | 0.1.0 | Локальная библиотека общих компонентов |
 | `vite` | 8.3.8 | Dev-сервер и production-сборка |
 | `@vitejs/plugin-react` | 6.3.0 | React-плагин для Vite |
@@ -215,6 +232,9 @@ src/
 | Библиотека | Версия | Назначение |
 |---|---|---|
 | `react` / `react-dom` | 19.3.1 | Peer-зависимости и dev-окружение |
+| `@mui/material` | 7.3.11 | Peer-зависимость: база всех компонентов-обёрток |
+| `@emotion/react` | 11.14.0 | Peer-зависимость MUI |
+| `@emotion/styled` | 11.14.1 | Peer-зависимость MUI |
 | `vite` | 8.3.8 | Сборка библиотеки в ESM |
 | `vite-plugin-dts` | 5.1.2 | Генерация `.d.ts` |
 | `typescript` | 5.9.3 | Типизация |
@@ -254,19 +274,42 @@ sidebar и topbar.
 `/requests/:requestId` читают параметры через `useParams`. Если объект
 не найден, показывается `EmptyState` со ссылкой назад.
 
-## 6. Использование UI library во frontend
+## 6. Использование UI library и MUI во frontend
 
 Frontend импортирует компоненты по имени пакета:
 
 ```tsx
 import { Card, PageHeader, StatCard, StatusBadge } from '@llm-gateway/ui'
-import '@llm-gateway/ui/style.css'
 ```
+
+Отдельный CSS-файл подключать не нужно: обёртки библиотеки стилизуются
+пропом `sx` и берут тему из `ThemeProvider`.
 
 `@llm-gateway/ui` подключён как локальная зависимость
 `"file:../ui-library"`. Перед `dev`, `build` и `test` frontend
 автоматически собирает библиотеку (`predev`, `prebuild`, `pretest`),
 поэтому `dist` библиотеки всегда актуален.
+
+MUI, Emotion и React объявлены в библиотеке как `peerDependencies` и
+вынесены в `build.rollupOptions.external`. Дополнительно frontend
+использует `resolve.dedupe`, поэтому в приложении остаётся ровно одна
+копия React и одна копия MUI — иначе хуки падают с
+`Cannot read properties of null (reading 'useContext')`.
+
+Тема приложения живёт в `src/theme.ts` и включает MUI в `main.tsx`:
+
+```tsx
+<ThemeProvider theme={theme}>
+  <CssBaseline />
+  <App />
+</ThemeProvider>
+```
+
+Тема задаёт тёмную палитру, скругления, типографику и overrides для
+`MuiPaper`/`MuiCssBaseline`. Поверх неё приложение использует MUI
+напрямую: `Drawer` и `AppBar` в `AppLayout`, `Table` на страницах
+списков, `TextField`/`MenuItem` в playground и логине, `Alert` для
+пояснений.
 
 Пример использования на странице:
 

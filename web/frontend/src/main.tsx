@@ -1,11 +1,11 @@
 import { StrictMode } from 'react'
 
+import CssBaseline from '@mui/material/CssBaseline'
+import { ThemeProvider } from '@mui/material/styles'
 import { createRoot } from 'react-dom/client'
 
-import '@llm-gateway/ui/style.css'
-
 import App from './App'
-import './styles/global.css'
+import { theme } from './theme'
 
 const rootElement = document.getElementById('root')
 
@@ -15,6 +15,9 @@ if (rootElement === null) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <App />
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <App />
+    </ThemeProvider>
   </StrictMode>,
 )

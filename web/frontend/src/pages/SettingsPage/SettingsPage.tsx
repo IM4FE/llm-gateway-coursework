@@ -1,6 +1,39 @@
+import type { ReactNode } from 'react'
+
+import Alert from '@mui/material/Alert'
+import Box from '@mui/material/Box'
+import Grid from '@mui/material/Grid'
+import List from '@mui/material/List'
+import ListItem from '@mui/material/ListItem'
+import ListItemText from '@mui/material/ListItemText'
+import Stack from '@mui/material/Stack'
+import Typography from '@mui/material/Typography'
+
 import { Button, Card, PageHeader, StatusBadge } from '@llm-gateway/ui'
 
 import { useAdminAuth } from '../../auth/useAdminAuth'
+
+const FEATURES = [
+  'CRUD провайдеров, моделей и alias-маршрутов.',
+  'Управление API-ключами и ручной сброс circuit breaker.',
+  'Лимиты клиентов и просмотр журнала аудита.',
+]
+
+interface DetailRowProps {
+  label: string
+  children: ReactNode
+}
+
+function DetailRow({ label, children }: DetailRowProps) {
+  return (
+    <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: '160px 1fr' }}>
+      <Typography color="text.secondary" variant="body2">
+        {label}
+      </Typography>
+      <Box>{children}</Box>
+    </Box>
+  )
+}
 
 function maskToken(token: string | null): string {
   if (token === null) {
@@ -18,7 +51,7 @@ export function SettingsPage() {
   const { token, signOut } = useAdminAuth()
 
   return (
-    <div className="page">
+    <Stack gap={3}>
       <PageHeader
         actions={
           <Button onClick={signOut} variant="danger">
@@ -30,34 +63,44 @@ export function SettingsPage() {
         title="Настройки"
       />
 
-      <div className="page-grid">
-        <Card title="Сессия">
-          <dl className="detail-list">
-            <dt>Статус</dt>
-            <dd>
-              <StatusBadge tone="success">authenticated</StatusBadge>
-            </dd>
-            <dt>Admin token</dt>
-            <dd className="mono">{maskToken(token)}</dd>
-            <dt>Хранилище</dt>
-            <dd className="mono">sessionStorage</dd>
-          </dl>
-        </Card>
+      <Grid container spacing={2}>
+        <Grid size={{ xs: 12, md: 6 }}>
+          <Card title="Сессия">
+            <Stack gap={1.5}>
+              <DetailRow label="Статус">
+                <StatusBadge tone="success">authenticated</StatusBadge>
+              </DetailRow>
+              <DetailRow label="Admin token">
+                <Typography sx={{ fontFamily: 'monospace', fontSize: 12 }}>{maskToken(token)}</Typography>
+              </DetailRow>
+              <DetailRow label="Хранилище">
+                <Typography sx={{ fontFamily: 'monospace', fontSize: 12 }}>sessionStorage</Typography>
+              </DetailRow>
+            </Stack>
+          </Card>
+        </Grid>
 
-        <Card title="Что появится дальше">
-          <ul className="feature-list">
-            <li>CRUD провайдеров, моделей и alias-маршрутов.</li>
-            <li>Управление API-ключами и ручной сброс circuit breaker.</li>
-            <li>Лимиты клиентов и просмотр журнала аудита.</li>
-          </ul>
-        </Card>
-      </div>
+        <Grid size={{ xs: 12, md: 6 }}>
+          <Card title="Что появится дальше">
+            <List dense disablePadding>
+              {FEATURES.map((feature) => (
+                <ListItem disableGutters key={feature} sx={{ alignItems: 'flex-start' }}>
+                  <ListItemText
+                    primary={feature}
+                    slotProps={{ primary: { color: 'text.secondary', fontSize: 13 } }}
+                  />
+                </ListItem>
+              ))}
+            </List>
+          </Card>
+        </Grid>
+      </Grid>
 
-      <div className="alert alert-info">
-        Защищённый маршрут <code>/settings</code> реализован через{' '}
-        <code>RequireAdmin</code>. При отсутствии сессии пользователь
-        перенаправляется на <code>/login?redirect=...</code>.
-      </div>
-    </div>
+      <Alert severity="info">
+        Защищённый маршрут <Box component="code">/settings</Box> реализован через{' '}
+        <Box component="code">RequireAdmin</Box>. При отсутствии сессии пользователь
+        перенаправляется на <Box component="code">/login?redirect=...</Box>.
+      </Alert>
+    </Stack>
   )
 }

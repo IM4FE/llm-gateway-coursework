@@ -1,6 +1,11 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 
+import Alert from '@mui/material/Alert'
+import Box from '@mui/material/Box'
+import Stack from '@mui/material/Stack'
+import TextField from '@mui/material/TextField'
+import Typography from '@mui/material/Typography'
 import { Navigate, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { Button, Card, PageHeader } from '@llm-gateway/ui'
@@ -35,8 +40,8 @@ export function LoginPage() {
   }
 
   return (
-    <div className="login-page">
-      <div className="login-card">
+    <Box sx={{ display: 'grid', minHeight: 'calc(100vh - 220px)', placeItems: 'center' }}>
+      <Stack gap={2.5} sx={{ width: 'min(460px, 100%)' }}>
         <PageHeader
           description="Демонстрационный gate для защищённых страниц консоли."
           eyebrow="Admin"
@@ -44,38 +49,31 @@ export function LoginPage() {
         />
 
         <Card>
-          <form className="form" onSubmit={handleSubmit}>
-            <div className="field">
-              <label htmlFor="admin-token">Admin token</label>
-              <input
-                autoComplete="off"
-                className="input"
-                id="admin-token"
-                onChange={(event) => setToken(event.target.value)}
-                placeholder="любая непустая строка"
-                type="password"
-                value={token}
-              />
-            </div>
+          <Stack component="form" gap={2} onSubmit={handleSubmit}>
+            <TextField
+              autoComplete="off"
+              fullWidth
+              id="admin-token"
+              label="Admin token"
+              onChange={(event) => setToken(event.target.value)}
+              placeholder="любая непустая строка"
+              type="password"
+              value={token}
+            />
 
-            {error !== null ? (
-              <div className="alert alert-error" role="alert">
-                {error}
-              </div>
-            ) : null}
+            {error !== null ? <Alert severity="error">{error}</Alert> : null}
 
             <Button fullWidth type="submit">
               Войти
             </Button>
-          </form>
+          </Stack>
         </Card>
 
-        <p className="muted login-hint">
-          В учебном каркасе токен не сверяется с backend: он лишь открывает
-          защищённые маршруты и хранится в sessionStorage. Реальная проверка
-          появится вместе с admin API.
-        </p>
-      </div>
-    </div>
+        <Typography color="text.secondary" sx={{ textAlign: 'center' }} variant="caption">
+          В учебном каркасе токен не сверяется с backend: он лишь открывает защищённые маршруты и
+          хранится в sessionStorage. Реальная проверка появится вместе с admin API.
+        </Typography>
+      </Stack>
+    </Box>
   )
 }

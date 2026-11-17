@@ -1,6 +1,10 @@
 import type { ReactNode } from 'react'
 
-import styles from './Card.module.css'
+import MuiCard from '@mui/material/Card'
+import CardContent from '@mui/material/CardContent'
+import CardHeader from '@mui/material/CardHeader'
+import Divider from '@mui/material/Divider'
+import Typography from '@mui/material/Typography'
 
 export type CardTone = 'default' | 'muted'
 
@@ -21,23 +25,43 @@ export function Card({
   className = '',
   tone = 'default',
 }: CardProps) {
-  const classes = [styles.card, styles[tone], className].filter(Boolean).join(' ')
   const hasHeader = title !== undefined || description !== undefined || actions !== undefined
 
   return (
-    <section className={classes}>
+    <MuiCard
+      className={className}
+      data-tone={tone}
+      sx={{
+        bgcolor: tone === 'muted' ? 'rgba(16, 26, 49, 0.55)' : 'background.paper',
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+      }}
+      variant="outlined"
+    >
       {hasHeader ? (
-        <header className={styles.header}>
-          <div className={styles.heading}>
-            {title !== undefined ? <h2 className={styles.title}>{title}</h2> : null}
-            {description !== undefined ? (
-              <p className={styles.description}>{description}</p>
-            ) : null}
-          </div>
-          {actions !== undefined ? <div className={styles.actions}>{actions}</div> : null}
-        </header>
+        <>
+          <CardHeader
+            action={actions}
+            subheader={
+              description !== undefined ? (
+                <Typography color="text.secondary" variant="body2">
+                  {description}
+                </Typography>
+              ) : undefined
+            }
+            title={
+              title !== undefined ? (
+                <Typography component="h2" fontWeight={650} variant="subtitle1">
+                  {title}
+                </Typography>
+              ) : undefined
+            }
+          />
+          <Divider />
+        </>
       ) : null}
-      <div className={styles.content}>{children}</div>
-    </section>
+      <CardContent sx={{ flexGrow: 1 }}>{children}</CardContent>
+    </MuiCard>
   )
 }

@@ -2,7 +2,6 @@ import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
 import { StatusBadge } from './StatusBadge'
-import styles from './StatusBadge.module.css'
 
 describe('StatusBadge', () => {
   it('renders a label and a dot by default', () => {
@@ -22,15 +21,21 @@ describe('StatusBadge', () => {
     expect(container.querySelector('span[aria-hidden="true"]')).toBeNull()
   })
 
-  it('applies every tone class', () => {
-    const tones = ['success', 'warning', 'danger', 'info', 'neutral'] as const
+  it('maps every tone to the matching MUI chip color', () => {
+    const cases = [
+      { tone: 'success', className: 'MuiChip-colorSuccess' },
+      { tone: 'warning', className: 'MuiChip-colorWarning' },
+      { tone: 'danger', className: 'MuiChip-colorError' },
+      { tone: 'info', className: 'MuiChip-colorInfo' },
+      { tone: 'neutral', className: 'MuiChip-colorDefault' },
+    ] as const
 
-    for (const tone of tones) {
+    for (const item of cases) {
       const { container, unmount } = render(
-        <StatusBadge tone={tone}>{tone}</StatusBadge>,
+        <StatusBadge tone={item.tone}>{item.tone}</StatusBadge>,
       )
 
-      expect(container.firstElementChild).toHaveClass(styles[tone]!)
+      expect(container.firstElementChild).toHaveClass(item.className)
       unmount()
     }
   })

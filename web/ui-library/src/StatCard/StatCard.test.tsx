@@ -2,7 +2,6 @@ import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
 import { StatCard } from './StatCard'
-import styles from './StatCard.module.css'
 
 describe('StatCard', () => {
   it('renders label, value, hint and icon', () => {
@@ -27,8 +26,19 @@ describe('StatCard', () => {
 
     const card = container.firstElementChild
 
-    expect(card).toHaveClass(styles.danger!)
+    expect(card).toHaveAttribute('data-tone', 'danger')
     expect(screen.queryByText('За последние 24 часа')).toBeNull()
     expect(screen.queryByText('↗')).toBeNull()
+  })
+
+  it('supports the default, warning and success tones', () => {
+    const tones = ['default', 'success', 'warning'] as const
+
+    for (const tone of tones) {
+      const { container, unmount } = render(<StatCard label={tone} tone={tone} value={1} />)
+
+      expect(container.firstElementChild).toHaveAttribute('data-tone', tone)
+      unmount()
+    }
   })
 })

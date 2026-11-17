@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 
-import styles from './StatusBadge.module.css'
+import Box from '@mui/material/Box'
+import Chip from '@mui/material/Chip'
 
 export type StatusTone = 'success' | 'warning' | 'danger' | 'info' | 'neutral'
 
@@ -10,15 +11,31 @@ export interface StatusBadgeProps {
   children: ReactNode
 }
 
-export function StatusBadge({
-  tone = 'neutral',
-  dot = true,
-  children,
-}: StatusBadgeProps) {
+const TONE_COLOR = {
+  success: 'success',
+  warning: 'warning',
+  danger: 'error',
+  info: 'info',
+  neutral: 'default',
+} as const satisfies Record<StatusTone, 'success' | 'warning' | 'error' | 'info' | 'default'>
+
+export function StatusBadge({ tone = 'neutral', dot = true, children }: StatusBadgeProps) {
   return (
-    <span className={[styles.badge, styles[tone]].join(' ')}>
-      {dot ? <span aria-hidden="true" className={styles.dot} /> : null}
-      {children}
-    </span>
+    <Chip
+      color={TONE_COLOR[tone]}
+      icon={
+        dot ? (
+          <Box
+            aria-hidden="true"
+            component="span"
+            sx={{ bgcolor: 'currentColor', borderRadius: '50%', height: 6, width: 6 }}
+          />
+        ) : undefined
+      }
+      label={children}
+      size="small"
+      sx={{ fontWeight: 600 }}
+      variant="outlined"
+    />
   )
 }

@@ -1,4 +1,14 @@
-import { Link } from 'react-router-dom'
+import Alert from '@mui/material/Alert'
+import Link from '@mui/material/Link'
+import Stack from '@mui/material/Stack'
+import Table from '@mui/material/Table'
+import TableBody from '@mui/material/TableBody'
+import TableCell from '@mui/material/TableCell'
+import TableContainer from '@mui/material/TableContainer'
+import TableHead from '@mui/material/TableHead'
+import TableRow from '@mui/material/TableRow'
+import Typography from '@mui/material/Typography'
+import { Link as RouterLink } from 'react-router-dom'
 
 import { Button, Card, PageHeader, StatusBadge } from '@llm-gateway/ui'
 
@@ -7,7 +17,7 @@ import { providerStatusLabel, providerStatusTone } from '../../lib/format'
 
 export function ProvidersPage() {
   return (
-    <div className="page">
+    <Stack gap={3}>
       <PageHeader
         actions={
           <Button disabled title="CRUD появится в следующем инкременте">
@@ -20,46 +30,47 @@ export function ProvidersPage() {
       />
 
       <Card description="Нажмите на имя провайдера, чтобы открыть детали.">
-        <div className="table-wrap">
-          <table className="table">
-            <thead>
-              <tr>
-                <th scope="col">Провайдер</th>
-                <th scope="col">Статус</th>
-                <th scope="col">Модели</th>
-                <th scope="col">Ключи</th>
-                <th scope="col">Latency</th>
-              </tr>
-            </thead>
-            <tbody>
+        <TableContainer>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Провайдер</TableCell>
+                <TableCell>Статус</TableCell>
+                <TableCell>Модели</TableCell>
+                <TableCell>Ключи</TableCell>
+                <TableCell>Latency</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
               {providers.map((provider) => (
-                <tr key={provider.id}>
-                  <td>
-                    <Link className="link" to={`/providers/${provider.id}`}>
+                <TableRow key={provider.id}>
+                  <TableCell>
+                    <Link component={RouterLink} to={`/providers/${provider.id}`} underline="hover">
                       {provider.name}
                     </Link>
-                    <div className="mono muted">{provider.baseUrl}</div>
-                  </td>
-                  <td>
+                    <Typography color="text.secondary" sx={{ fontFamily: 'monospace', fontSize: 12 }}>
+                      {provider.baseUrl}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>
                     <StatusBadge tone={providerStatusTone(provider.status)}>
                       {providerStatusLabel(provider.status)}
                     </StatusBadge>
-                  </td>
-                  <td>{provider.models}</td>
-                  <td>{provider.keys}</td>
-                  <td className="mono">{provider.latencyMs} ms</td>
-                </tr>
+                  </TableCell>
+                  <TableCell>{provider.models}</TableCell>
+                  <TableCell>{provider.keys}</TableCell>
+                  <TableCell sx={{ fontFamily: 'monospace', fontSize: 12 }}>{provider.latencyMs} ms</TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </TableBody>
+          </Table>
+        </TableContainer>
       </Card>
 
-      <div className="alert alert-info">
-        Это каркас админ-консоли: список читается из mock-данных. Создание,
-        редактирование и удаление провайдеров появятся после добавления
-        admin API в backend.
-      </div>
-    </div>
+      <Alert severity="info">
+        Это каркас админ-консоли: список читается из mock-данных. Создание, редактирование и
+        удаление провайдеров появятся после добавления admin API в backend.
+      </Alert>
+    </Stack>
   )
 }

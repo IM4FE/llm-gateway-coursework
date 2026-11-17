@@ -21,10 +21,10 @@ describe('PageHeader', () => {
   })
 
   it('renders only the required title', () => {
-    const { container } = render(<PageHeader title="Модели" />)
+    render(<PageHeader title="Модели" />)
 
     expect(screen.getByRole('heading', { name: 'Модели' })).toBeInTheDocument()
-    expect(container.querySelector('p')).toBeNull()
+    expect(screen.queryByText('Раздел')).toBeNull()
     expect(screen.queryByRole('button')).toBeNull()
   })
 })

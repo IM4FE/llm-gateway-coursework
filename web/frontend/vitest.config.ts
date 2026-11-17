@@ -3,6 +3,9 @@ import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    dedupe: ['react', 'react-dom', '@emotion/react', '@emotion/styled', '@mui/material'],
+  },
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/setupTests.ts'],
@@ -15,6 +18,7 @@ export default defineConfig({
         'src/setupTests.ts',
         'src/main.tsx',
         'src/App.tsx',
+        'src/theme.ts',
       ],
     },
   },

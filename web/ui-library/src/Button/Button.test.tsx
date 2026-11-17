@@ -2,18 +2,18 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { Button } from './Button'
-import styles from './Button.module.css'
 
 describe('Button', () => {
-  it('renders its children and defaults to a non-submit button', () => {
+  it('renders its children as a contained primary button', () => {
     render(<Button>Отправить</Button>)
 
     const button = screen.getByRole('button', { name: 'Отправить' })
 
     expect(button).toBeInTheDocument()
     expect(button).toHaveAttribute('type', 'button')
-    expect(button).toHaveClass(styles.primary!)
-    expect(button).toHaveClass(styles.md!)
+    expect(button).toHaveClass('MuiButton-contained')
+    expect(button).toHaveClass('MuiButton-colorPrimary')
+    expect(button).toHaveClass('MuiButton-sizeMedium')
   })
 
   it('calls onClick and supports the submit type', () => {
@@ -45,21 +45,38 @@ describe('Button', () => {
     const button = screen.getByRole('button', { name: 'Загрузка' })
 
     expect(button).toBeDisabled()
-    expect(button.querySelector('span[aria-hidden="true"]')).not.toBeNull()
+    expect(screen.getByRole('progressbar')).toBeInTheDocument()
   })
 
-  it('applies variant, size, full width and custom class names', () => {
+  it('maps the danger variant and small size', () => {
     render(
-      <Button className="custom" fullWidth size="sm" variant="danger">
+      <Button className="custom" size="sm" variant="danger">
         Удалить
       </Button>,
     )
 
     const button = screen.getByRole('button', { name: 'Удалить' })
 
-    expect(button).toHaveClass(styles.danger!)
-    expect(button).toHaveClass(styles.sm!)
-    expect(button).toHaveClass(styles.fullWidth!)
+    expect(button).toHaveClass('MuiButton-contained')
+    expect(button).toHaveClass('MuiButton-colorError')
+    expect(button).toHaveClass('MuiButton-sizeSmall')
     expect(button).toHaveClass('custom')
+  })
+
+  it('supports the secondary and ghost variants and full width', () => {
+    const { rerender } = render(
+      <Button fullWidth variant="secondary">
+        Вторичная
+      </Button>,
+    )
+
+    const secondary = screen.getByRole('button', { name: 'Вторичная' })
+
+    expect(secondary).toHaveClass('MuiButton-outlined')
+    expect(secondary).toHaveClass('MuiButton-fullWidth')
+
+    rerender(<Button variant="ghost">Призрачная</Button>)
+
+    expect(screen.getByRole('button', { name: 'Призрачная' })).toHaveClass('MuiButton-text')
   })
 })

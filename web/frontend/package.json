@@ -18,7 +18,11 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
     "@llm-gateway/ui": "file:../ui-library",
+    "@mui/icons-material": "^7.3.11",
+    "@mui/material": "^7.3.11",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-router-dom": "^7.18.5"

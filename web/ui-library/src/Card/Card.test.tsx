@@ -2,7 +2,6 @@ import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
 import { Card } from './Card'
-import styles from './Card.module.css'
 
 describe('Card', () => {
   it('renders a header with title, description and actions', () => {
@@ -25,7 +24,7 @@ describe('Card', () => {
   it('omits the header when no header props are provided', () => {
     const { container } = render(<Card>Только контент</Card>)
 
-    expect(container.querySelector('header')).toBeNull()
+    expect(container.querySelector('.MuiCardHeader-root')).toBeNull()
     expect(screen.getByText('Только контент')).toBeInTheDocument()
   })
 
@@ -38,8 +37,8 @@ describe('Card', () => {
 
     const card = container.firstElementChild
 
-    expect(card).toHaveClass(styles.card!)
-    expect(card).toHaveClass(styles.muted!)
+    expect(card).toHaveClass('MuiCard-root')
     expect(card).toHaveClass('custom')
+    expect(card).toHaveAttribute('data-tone', 'muted')
   })
 })
