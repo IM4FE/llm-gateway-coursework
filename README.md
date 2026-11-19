@@ -13,7 +13,103 @@
 - Drizzle ORM
 - Pino
 - Vitest
+- React 19 + MUI 7 (Material UI) в веб-консоли
 
+## Веб-консоль
+
+В репозитории три самостоятельных проекта:
+
+- **backend** — Fastify-шлюз в корне репозитория;
+- **frontend** — React-консоль в `web/frontend`;
+- **ui-library** — библиотека общих компонентов в `web/ui-library`.
+
+Интерфейс собран на [MUI](https://mui.com/material-ui/): тёмная тема
+описана в `web/frontend/src/theme.ts`, layout построен на `Drawer` и
+`AppBar`, таблицы — на `Table`, формы — на `TextField`. Библиотека
+`@llm-gateway/ui` — это обёртки над MUI (`Button`, `Card`,
+`StatusBadge`, `PageHeader`, `StatCard`, `EmptyState`), поэтому обе
+части приложения выглядят одинаково.
+
+Подробная структура, список библиотек и роутинг описаны в
+[`architecture.md`](architecture.md). Границы MVP и use case — в
+[`mvp.md`](mvp.md).
+
+### Запуск веб-консоли
+
+Сначала запустите backend по инструкции ниже. Затем установите
+зависимости и соберите библиотеку:
+
+```sh
+cd web/ui-library
+npm install
+npm run build
+```
+
+После этого запустите frontend:
+
+```sh
+cd ../frontend
+npm install
+npm run dev
+```
+
+Команды `dev`, `build` и `test` frontend сами пересобирают библиотеку
+через `predev`, `prebuild` и `pretest`, поэтому отдельный `npm run build`
+нужен только для первой проверки.
+
+Откройте `http://localhost:5173`. Vite проксирует запросы `/v1` и
+`/api` на `http://localhost:3000`, поэтому песочница и журнал запросов
+работают без CORS.
+
+Проверки обоих frontend-проектов:
+
+```sh
+cd web/ui-library
+npm run lint && npm run test:coverage && npm run build
+
+cd ../frontend
+npm run lint && npm run test:coverage && npm run build
+```
+
+### Скриншоты
+
+Панель управления с mock-снимком состояния шлюза:
+
+![Панель управления](docs/screenshots/dashboard.png)
+
+Список провайдеров:
+
+![Провайдеры](docs/screenshots/providers.png)
+
+Детали провайдера с параметром маршрута:
+
+![Детали провайдера](docs/screenshots/provider-details.png)
+
+Песочница для реального запроса через backend:
+
+![Песочница](docs/screenshots/playground.png)
+
+Песочница отправляет запрос вместе с system-сообщением «Отвечай на
+русском языке, если пользователь не попросил ответить на другом языке»,
+поэтому ответ модели приходит по-русски. Backend принимает роли
+`system`, `user` и `assistant`.
+
+Журнал запросов:
+
+![Запросы](docs/screenshots/requests.png)
+
+Детали запроса и fallback-попытки:
+
+![Детали запроса](docs/screenshots/request-details.png)
+
+Защищённый раздел настроек:
+
+![Настройки](docs/screenshots/settings.png)
+
+> Скриншоты сделаны на каркасе с mock-данными провайдеров и маршрутов.
+> Журнал запросов и страница деталей уже читают реальные данные из
+> backend через read-only API. Интерфейс построен на MUI 7 с тёмной
+> темой, компоненты взяты из `@llm-gateway/ui`.
 ## Быстрый старт
 
 ```sh
@@ -235,6 +331,38 @@ curl.exe -i -sS -X POST http://localhost:3000/v1/chat/completions `
 - запись журнала best-effort: если БД недоступна, клиент всё равно получит
   ответ провайдера, а ошибка сохранения попадёт в лог приложения;
 - `X-Request-Id` возвращается на всех ответах, включая ошибки.
+
+#### Read-only API для веб-консоли
+
+Веб-консоль не читает БД напрямую и не использует статический снимок
+журнала. Backend отдаёт журнал двумя read-only endpoint'ами:
+
+```http
+GET /api/requests?limit=50
+GET /api/requests/:requestId
+```
+
+`GET /api/requests` возвращает последние запросы в виде
+`{ "requests": [...] }`, а `GET /api/requests/:requestId` — запрос вместе
+с массивом `attempts`. Если запрос не найден, возвращается `404`:
+
+```json
+{
+  "error": {
+    "code": "request_not_found",
+    "message": "Request 6f1c2a7e-... was not found"
+  }
+}
+```
+
+Эти endpoint'ы не содержат секретов, поэтому чтение журнала открыто без
+admin-токена. Он понадобится для будущих операций изменения данных.
+Vite проксирует `/api` на backend, поэтому в браузере достаточно
+открыть `http://localhost:5173/requests`.
+
+После ответа песочница показывает `X-Request-Id` и ссылку на детали
+запроса. Запись уже сохранена к моменту отправки ответа клиенту, поэтому
+переход в журнал сразу находит нужный request id.
 
 ### Стоимость запросов
 
@@ -557,7 +685,8 @@ docker compose exec postgres psql -U gateway -d llm_gateway -c \
 - маршрут `alias → model`;
 - активный ключ в `api_keys`.
 
-`ADMIN_TOKEN` пока не используется: он предназначен для будущей админки.
+`ADMIN_TOKEN` пока не используется: журнал доступен через read-only API
+без токена, а операции изменения данных появятся в следующих инкрементах.
 
 ## Скрипты
 
@@ -586,7 +715,9 @@ src/
 ├── routes/          # HTTP-маршруты, резолвер и сборка deployment'ов
 ├── app.ts           # сборка Fastify-приложения
 └── index.ts         # точка входа
-web/                 # будущая demo/admin-консоль (React)
+web/
+├── frontend/        # React admin console
+└── ui-library/      # библиотека общих компонентов
 docs/                # пояснения и проектная документация
 ```
 
@@ -617,7 +748,8 @@ deepseek/deepseek-r1:free
 ## Документация
 
 - [Как работает SSE и streaming](docs/streaming.md)
-- [План и архитектурные решения](docs/architecture.md) — в следующем шаге
+- [Архитектура проекта](architecture.md)
+- [Границы MVP и use case](mvp.md)
 
 ## Текущий статус
 
@@ -641,4 +773,6 @@ deepseek/deepseek-r1:free
 - [x] Streaming (SSE): адаптер, Router и HTTP-слой
 - [x] Расчёт стоимости запросов (`cost_micros`)
 - [x] Circuit breaker ключей
-- [ ] Demo/admin-консоль
+- [x] Веб-консоль: React frontend и библиотека общих компонентов
+- [x] Интерфейс на MUI 7: тёмная тема, Drawer/AppBar, таблицы и формы
+- [x] Журнал запросов в консоли читается из backend (`/api/requests`)

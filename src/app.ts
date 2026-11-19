@@ -9,6 +9,7 @@ import type { Env } from './config/env.js';
 import type { RateLimiter } from './core/RateLimiter.js';
 import type { RequestLogRepository } from './db/requestLogRepository.js';
 import { createLogger } from './logger.js';
+import { registerAdminRequestRoutes } from './routes/adminRequests.js';
 import {
   registerChatCompletionRoute,
   type ChatCompletionHandler,
@@ -42,11 +43,18 @@ export function buildApp(
   }));
 
   registerChatCompletionRoute(app, dependencies);
+  registerAdminRequestRoutes(app, dependencies);
 
   app.get('/', async () => ({
     name: 'llm-gateway',
     version: '0.1.0',
-    endpoints: ['/health', '/ready', '/v1/chat/completions'],
+    endpoints: [
+      '/health',
+      '/ready',
+      '/v1/chat/completions',
+      '/api/requests',
+      '/api/requests/:requestId',
+    ],
   }));
 
   return app;

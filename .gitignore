@@ -17,5 +17,8 @@ coverage/
 
 web/node_modules/
 web/dist/
-example_react/**/node_modules/
-example_react/**/dist/
+web/**/node_modules/
+web/**/dist/
+web/**/coverage/
+web/**/.vite/
+example_react/

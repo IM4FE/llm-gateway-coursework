@@ -4,7 +4,11 @@ import type { Database } from './client.js';
 import {
   RequestLogRepository,
   createRequestLogRepository,
+  type RequestLogDetails,
+  type RequestLogDetailsReader,
+  type RequestLogListReader,
   type RequestLogRecord,
+  type RequestLogSummary,
   type RequestLogWriter,
 } from './requestLogRepository.js';
 import { requestLogs } from './schema.js';
@@ -116,6 +120,64 @@ describe('RequestLogRepository', () => {
     const repository = new RequestLogRepository(writer);
 
     await expect(repository.save(record)).rejects.toThrow('connection refused');
+  });
+});
+
+const summary: RequestLogSummary = {
+  id: 'log-1',
+  requestId: 'req-1',
+  requestedModel: 'fast-model',
+  actualModel: 'upstream-model',
+  clientName: 'Test Client',
+  providerName: 'OpenRouter',
+  promptTokens: 10,
+  completionTokens: 5,
+  totalTokens: 15,
+  costMicros: 0,
+  latencyMs: 120,
+  ttftMs: null,
+  status: 'success',
+  errorCode: null,
+  isStream: false,
+  createdAt: new Date('2026-11-17T18:41:12.000Z'),
+};
+
+describe('RequestLogRepository readers', () => {
+  it('delegates list to the injected reader', async () => {
+    const writer = vi.fn<RequestLogWriter>().mockResolvedValue(undefined);
+    const listReader = vi
+      .fn<RequestLogListReader>()
+      .mockResolvedValue([summary]);
+    const repository = new RequestLogRepository(writer, listReader);
+
+    await expect(repository.list(10)).resolves.toEqual([summary]);
+    expect(listReader).toHaveBeenCalledWith(10);
+  });
+
+  it('delegates request details to the injected reader', async () => {
+    const writer = vi.fn<RequestLogWriter>().mockResolvedValue(undefined);
+    const details: RequestLogDetails = { ...summary, attempts: [] };
+    const detailsReader = vi
+      .fn<RequestLogDetailsReader>()
+      .mockResolvedValue(details);
+    const repository = new RequestLogRepository(
+      writer,
+      undefined,
+      detailsReader,
+    );
+
+    await expect(repository.findByRequestId('req-1')).resolves.toEqual(
+      details,
+    );
+    expect(detailsReader).toHaveBeenCalledWith('req-1');
+  });
+
+  it('returns empty results when readers are not configured', async () => {
+    const writer = vi.fn<RequestLogWriter>().mockResolvedValue(undefined);
+    const repository = new RequestLogRepository(writer);
+
+    await expect(repository.list()).resolves.toEqual([]);
+    await expect(repository.findByRequestId('req-1')).resolves.toBeUndefined();
   });
 });
 

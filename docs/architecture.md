@@ -51,6 +51,8 @@ Client
 8. Ответ нормализуется в OpenAI-совместимый формат.
 9. В БД пишутся `request_logs` и `request_attempts`.
 10. Клиент получает JSON или SSE-поток.
+11. Веб-консоль читает журнал через read-only
+    `GET /api/requests` и `GET /api/requests/:requestId`.
 
 ## 4. Модель маршрутизации
 
@@ -130,7 +132,9 @@ index = (index + 1) % keys.length
 - Ключи клиентов хранятся как HMAC/SHA-256 hash, а не в открытом виде.
 - В логах Pino настраивается redaction для `authorization`, `x-api-key`,
   `cookie`.
-- Admin API защищён отдельным `ADMIN_TOKEN`.
+- Admin API для изменения данных защищён отдельным `ADMIN_TOKEN`.
+- Read-only API журнала (`/api/requests`) не содержит секретов и доступен
+  веб-консоли без токена.
 - `base_url` провайдера проверяется по allowlist, чтобы не получить SSRF.
 
 ## 8. Данные
