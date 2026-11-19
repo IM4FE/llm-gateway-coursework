@@ -1,11 +1,77 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { RouterProvider, createMemoryRouter } from 'react-router-dom'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AdminAuthProvider } from './auth/AdminAuthProvider'
-import { requests } from './data/mockData'
 import { routes } from './router/routes'
+
+import type { RequestLog, RequestLogDetails } from './data/types'
+
+const sampleRequest: RequestLog = {
+  id: 'log-1',
+  requestId: '7f4c2b91-6d20-4f4f-a6e2-1b7c9d0e1001',
+  requestedModel: 'fast-model',
+  actualModel: 'nvidia/nemotron-3.5-lightning:free',
+  clientName: 'Postman',
+  providerName: 'OpenRouter',
+  status: 'success',
+  errorCode: null,
+  costMicros: 0,
+  promptTokens: 42,
+  completionTokens: 118,
+  totalTokens: 160,
+  latencyMs: 418,
+  ttftMs: null,
+  isStream: false,
+  createdAt: '2026-11-17T18:41:12.000Z',
+}
+
+const sampleDetails: RequestLogDetails = {
+  ...sampleRequest,
+  attempts: [
+    {
+      attemptNo: 1,
+      providerName: 'OpenRouter',
+      status: 'success',
+      httpStatus: 200,
+      errorCode: null,
+      latencyMs: 418,
+      createdAt: '2026-11-17T18:41:12.000Z',
+    },
+  ],
+}
+
+function jsonResponse(body: unknown, status = 200): {
+  ok: boolean
+  status: number
+  json: () => Promise<unknown>
+} {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+  }
+}
+
+function stubApi(): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+
+      if (url === '/api/requests') {
+        return jsonResponse({ requests: [sampleRequest] })
+      }
+
+      if (url === `/api/requests/${sampleRequest.requestId}`) {
+        return jsonResponse(sampleDetails)
+      }
+
+      return jsonResponse({ error: { message: 'Not found' } }, 404)
+    }),
+  )
+}
 
 function renderApp(initialEntries: string[] = ['/']): void {
   const router = createMemoryRouter(routes, { initialEntries })
@@ -20,15 +86,23 @@ function renderApp(initialEntries: string[] = ['/']): void {
 describe('App routing', () => {
   beforeEach(() => {
     sessionStorage.clear()
+    stubApi()
   })
 
-  it('renders the dashboard', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('renders the dashboard', async () => {
     renderApp()
 
     expect(
       screen.getByRole('heading', { name: 'Панель управления' }),
     ).toBeInTheDocument()
     expect(screen.getByText('Последние запросы')).toBeInTheDocument()
+    expect(
+      await screen.findByRole('link', { name: sampleRequest.requestedModel }),
+    ).toBeInTheDocument()
   })
 
   it('navigates to providers and opens a provider detail page', async () => {
@@ -58,17 +132,13 @@ describe('App routing', () => {
     ).toBeInTheDocument()
   })
 
-  it('opens the requests journal', () => {
-    const request = requests[0]
-
-    if (request === undefined) {
-      throw new Error('Mock request is missing')
-    }
-
+  it('opens the requests journal with data from the API', async () => {
     renderApp(['/requests'])
 
     expect(screen.getByRole('heading', { name: 'Запросы' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: request.requestId })).toBeInTheDocument()
+    expect(
+      await screen.findByRole('link', { name: sampleRequest.requestId }),
+    ).toBeInTheDocument()
   })
 
   it('opens the sandbox', () => {
@@ -78,17 +148,13 @@ describe('App routing', () => {
     expect(screen.getByLabelText('Alias модели')).toBeInTheDocument()
   })
 
-  it('opens request details by route parameter', () => {
-    const request = requests[0]
-
-    if (request === undefined) {
-      throw new Error('Mock request is missing')
-    }
-
-    renderApp([`/requests/${request.id}`])
+  it('opens request details by request id', async () => {
+    renderApp([`/requests/${sampleRequest.requestId}`])
 
     expect(
-      screen.getByRole('heading', { name: `Запрос ${request.requestId}` }),
+      await screen.findByRole('heading', {
+        name: `Запрос ${sampleRequest.requestId}`,
+      }),
     ).toBeInTheDocument()
     expect(screen.getByText('Попытки')).toBeInTheDocument()
   })

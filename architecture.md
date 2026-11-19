@@ -41,8 +41,9 @@ llm-gateway-coursework/
 │   │   ├── src/
 │   │   │   ├── auth/            # контекст админ-сессии
 │   │   │   ├── components/      # AppLayout, SidebarNav, RequireAdmin
-│   │   │   ├── data/            # типы и mock-данные
-│   │   │   ├── lib/             # форматирование
+│   │   │   ├── data/            # типы и mock-данные провайдеров/маршрутов
+│   │   │   ├── hooks/           # загрузка журнала запросов из API
+│   │   │   ├── lib/             # форматирование и HTTP-клиент
 │   │   │   ├── pages/           # страницы приложения
 │   │   │   ├── router/          # конфигурация маршрутов
 │   │   │   ├── App.tsx
@@ -118,8 +119,10 @@ rate limiting, журналирование и расчёт стоимости.
 | `src/components/RequireAdmin/` | Защита маршрутов, redirect на `/login` |
 | `src/auth/` | Контекст админ-сессии и `sessionStorage` |
 | `src/pages/` | Страницы приложения |
-| `src/data/` | Типы и mock-данные для каркаса |
+| `src/data/` | Типы и mock-данные провайдеров и маршрутов |
+| `src/hooks/` | Загрузка журнала запросов из read-only API |
 | `src/lib/format.ts` | Форматирование дат, micro-USD и статусов |
+| `src/lib/api.ts` | HTTP-клиент журнала и разбор ответов backend |
 
 Стилей в CSS-файлах нет: вся вёрстка описана пропом `sx` и темой MUI,
 поэтому глобальный `src/styles/global.css` больше не нужен.
@@ -135,8 +138,8 @@ rate limiting, журналирование и расчёт стоимости.
 | `ProvidersPage` | Список провайдеров |
 | `ProviderDetailsPage` | Детали провайдера по `:providerId` |
 | `ModelsPage` | Alias-маршруты и upstream-модели |
-| `RequestsPage` | Журнал запросов |
-| `RequestDetailsPage` | Попытки и стоимость запроса по `:requestId` |
+| `RequestsPage` | Журнал запросов из `GET /api/requests` |
+| `RequestDetailsPage` | Попытки и стоимость запроса по `:requestId` из `GET /api/requests/:requestId` |
 | `PlaygroundPage` | Песочница: отправка реального запроса через Vite proxy |
 | `SettingsPage` | Защищённый раздел админ-настроек |
 | `LoginPage` | Демонстрационный вход в админ-сессию |
@@ -382,8 +385,11 @@ npm run test:coverage
 
 ## 9. Ограничения текущего каркаса
 
-- Провайдеры, ключи и журнал на страницах — mock-данные.
+- Провайдеры, ключи и маршруты на страницах — mock-данные.
+- Журнал запросов и детали запроса читаются из backend через
+  read-only API `/api/requests`.
 - Admin API для CRUD ещё не реализован.
 - Админ-сессия хранится в `sessionStorage` и не проверяется backend.
-- Песочница использует Vite proxy `/v1` → `http://localhost:3000`.
+- Песочница использует Vite proxy `/v1` → `http://localhost:3000`,
+  журнал — `/api` → `http://localhost:3000`.
 - Графики, WebSocket-обновления и полноценная аналитика не входят в MVP.

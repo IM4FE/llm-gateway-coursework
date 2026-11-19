@@ -59,8 +59,10 @@ export function requestStatusTone(status: RequestStatus): StatusTone {
     return 'success'
   case 'error':
     return 'danger'
-  case 'pending':
+  case 'timeout':
     return 'warning'
+  case 'cancelled':
+    return 'neutral'
   }
 }
 
@@ -72,5 +74,7 @@ export function attemptStatusTone(status: AttemptStatus): StatusTone {
     return 'danger'
   case 'timeout':
     return 'warning'
+  case 'skipped':
+    return 'neutral'
   }
 }

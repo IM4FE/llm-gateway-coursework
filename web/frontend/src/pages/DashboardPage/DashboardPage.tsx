@@ -1,3 +1,4 @@
+import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Grid from '@mui/material/Grid'
 import Link from '@mui/material/Link'
@@ -11,9 +12,10 @@ import TableRow from '@mui/material/TableRow'
 import Typography from '@mui/material/Typography'
 import { Link as RouterLink } from 'react-router-dom'
 
-import { Card, PageHeader, StatCard, StatusBadge } from '@llm-gateway/ui'
+import { Card, EmptyState, PageHeader, StatCard, StatusBadge } from '@llm-gateway/ui'
 
-import { modelRoutes, providers, requests } from '../../data/mockData'
+import { modelRoutes, providers } from '../../data/mockData'
+import { useRequestLogs } from '../../hooks/useRequestLogs'
 import {
   formatDateTime,
   formatMicros,
@@ -25,6 +27,7 @@ import {
 const MONO = { fontFamily: 'monospace', fontSize: 12 } as const
 
 export function DashboardPage() {
+  const { requests, loading, error } = useRequestLogs()
   const successCount = requests.filter((request) => request.status === 'success').length
   const errorCount = requests.filter((request) => request.status === 'error').length
   const totalCost = requests.reduce((sum, request) => sum + request.costMicros, 0)
@@ -38,7 +41,7 @@ export function DashboardPage() {
             Открыть песочницу →
           </Link>
         }
-        description="Состояние шлюза, маршрутов и последних запросов. Данные на этой странице — mock-снимок для каркаса интерфейса."
+        description="Состояние шлюза и последние запросы. Журнал загружается из backend, провайдеры и маршруты пока демонстрационные."
         eyebrow="Overview"
         title="Панель управления"
       />
@@ -75,40 +78,64 @@ export function DashboardPage() {
             description="Последние обращения клиентов к alias-моделям."
             title="Последние запросы"
           >
-            <TableContainer>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Модель</TableCell>
-                    <TableCell>Провайдер</TableCell>
-                    <TableCell>Статус</TableCell>
-                    <TableCell>Стоимость</TableCell>
-                    <TableCell>Время</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {requests.slice(0, 4).map((request) => (
-                    <TableRow key={request.id}>
-                      <TableCell>
-                        <Link component={RouterLink} sx={MONO} to={`/requests/${request.id}`} underline="hover">
-                          {request.model}
-                        </Link>
-                      </TableCell>
-                      <TableCell>{request.provider}</TableCell>
-                      <TableCell>
-                        <StatusBadge tone={requestStatusTone(request.status)}>{request.status}</StatusBadge>
-                      </TableCell>
-                      <TableCell sx={MONO}>{formatMicros(request.costMicros)}</TableCell>
-                      <TableCell>
-                        <Typography color="text.secondary" variant="body2">
-                          {formatDateTime(request.createdAt)}
-                        </Typography>
-                      </TableCell>
+            {error !== null ? <Alert severity="error">{error}</Alert> : null}
+
+            {loading ? (
+              <Typography color="text.secondary" variant="body2">
+                Загружаем журнал…
+              </Typography>
+            ) : null}
+
+            {!loading && error === null && requests.length === 0 ? (
+              <EmptyState
+                description="Отправьте первый запрос через песочницу."
+                title="Журнал пуст"
+              />
+            ) : null}
+
+            {requests.length > 0 ? (
+              <TableContainer>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Модель</TableCell>
+                      <TableCell>Провайдер</TableCell>
+                      <TableCell>Статус</TableCell>
+                      <TableCell>Стоимость</TableCell>
+                      <TableCell>Время</TableCell>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
+                  </TableHead>
+                  <TableBody>
+                    {requests.slice(0, 4).map((request) => (
+                      <TableRow key={request.id}>
+                        <TableCell>
+                          <Link
+                            component={RouterLink}
+                            sx={MONO}
+                            to={`/requests/${request.requestId}`}
+                            underline="hover"
+                          >
+                            {request.requestedModel}
+                          </Link>
+                        </TableCell>
+                        <TableCell>{request.providerName ?? '—'}</TableCell>
+                        <TableCell>
+                          <StatusBadge tone={requestStatusTone(request.status)}>
+                            {request.status}
+                          </StatusBadge>
+                        </TableCell>
+                        <TableCell sx={MONO}>{formatMicros(request.costMicros)}</TableCell>
+                        <TableCell>
+                          <Typography color="text.secondary" variant="body2">
+                            {formatDateTime(request.createdAt)}
+                          </Typography>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            ) : null}
           </Card>
         </Grid>
 

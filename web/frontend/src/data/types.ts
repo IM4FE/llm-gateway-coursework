@@ -24,27 +24,38 @@ export interface ModelRoute {
   status: RouteStatus
 }
 
-export type RequestStatus = 'success' | 'error' | 'pending'
-export type AttemptStatus = 'success' | 'error' | 'timeout'
-
-export interface RequestAttempt {
-  attempt: number
-  provider: string
-  status: AttemptStatus
-  errorCode: string | null
-  latencyMs: number
-}
+export type RequestStatus = 'success' | 'error' | 'timeout' | 'cancelled'
+export type AttemptStatus = 'success' | 'error' | 'timeout' | 'skipped'
 
 export interface RequestLog {
   id: string
   requestId: string
-  model: string
-  client: string
+  requestedModel: string
+  actualModel: string | null
+  clientName: string | null
+  providerName: string | null
   status: RequestStatus
-  provider: string
+  errorCode: string | null
   costMicros: number
   promptTokens: number
   completionTokens: number
+  totalTokens: number
+  latencyMs: number
+  ttftMs: number | null
+  isStream: boolean
   createdAt: string
+}
+
+export interface RequestAttempt {
+  attemptNo: number
+  providerName: string | null
+  status: AttemptStatus
+  httpStatus: number | null
+  errorCode: string | null
+  latencyMs: number
+  createdAt: string
+}
+
+export interface RequestLogDetails extends RequestLog {
   attempts: RequestAttempt[]
 }

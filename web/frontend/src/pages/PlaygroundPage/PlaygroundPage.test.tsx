@@ -1,17 +1,32 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { PlaygroundPage } from './PlaygroundPage'
 
-function jsonResponse(body: unknown, status = 200): {
+function renderPlayground(): void {
+  render(
+    <MemoryRouter>
+      <PlaygroundPage />
+    </MemoryRouter>,
+  )
+}
+
+function jsonResponse(
+  body: unknown,
+  status = 200,
+  headers: Record<string, string> = {},
+): {
   ok: boolean
   status: number
+  headers: Headers
   text: () => Promise<string>
 } {
   return {
     ok: status >= 200 && status < 300,
     status,
+    headers: new Headers(headers),
     text: async () => JSON.stringify(body),
   }
 }
@@ -22,7 +37,7 @@ describe('PlaygroundPage', () => {
   })
 
   it('renders the request form', () => {
-    render(<PlaygroundPage />)
+    renderPlayground()
 
     expect(screen.getByRole('heading', { name: 'Песочница' })).toBeInTheDocument()
     expect(screen.getByLabelText('Клиентский ключ')).toBeInTheDocument()
@@ -32,7 +47,7 @@ describe('PlaygroundPage', () => {
   it('requires a client key before sending', async () => {
     const user = userEvent.setup()
 
-    render(<PlaygroundPage />)
+    renderPlayground()
 
     await user.click(screen.getByRole('button', { name: 'Отправить запрос' }))
 
@@ -44,17 +59,25 @@ describe('PlaygroundPage', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(
-        jsonResponse({ choices: [{ message: { content: 'pong' } }], provider: 'LocalMock' }),
+        jsonResponse(
+          { choices: [{ message: { content: 'pong' } }], provider: 'LocalMock' },
+          200,
+          { 'X-Request-Id': 'req-test-1' },
+        ),
       )
 
     vi.stubGlobal('fetch', fetchMock)
-    render(<PlaygroundPage />)
+    renderPlayground()
 
     await user.type(screen.getByLabelText('Клиентский ключ'), 'lgw_test')
     await user.click(screen.getByRole('button', { name: 'Отправить запрос' }))
 
     expect(await screen.findByText('pong')).toBeInTheDocument()
     expect(screen.getByText('LocalMock')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'req-test-1' })).toHaveAttribute(
+      'href',
+      '/requests/req-test-1',
+    )
     expect(fetchMock).toHaveBeenCalledWith(
       '/v1/chat/completions',
       expect.objectContaining({ method: 'POST' }),
@@ -83,7 +106,7 @@ describe('PlaygroundPage', () => {
       'fetch',
       vi.fn().mockResolvedValue(jsonResponse({ error: { message: 'All providers failed' } }, 502)),
     )
-    render(<PlaygroundPage />)
+    renderPlayground()
 
     await user.type(screen.getByLabelText('Клиентский ключ'), 'lgw_test')
     await user.click(screen.getByRole('button', { name: 'Отправить запрос' }))
@@ -98,7 +121,7 @@ describe('PlaygroundPage', () => {
       'fetch',
       vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => '' }),
     )
-    render(<PlaygroundPage />)
+    renderPlayground()
 
     await user.type(screen.getByLabelText('Клиентский ключ'), 'lgw_test')
     await user.click(screen.getByRole('button', { name: 'Отправить запрос' }))
@@ -121,7 +144,7 @@ describe('PlaygroundPage', () => {
         text: async () => '<html>Bad gateway</html>',
       }),
     )
-    render(<PlaygroundPage />)
+    renderPlayground()
 
     await user.type(screen.getByLabelText('Клиентский ключ'), 'lgw_test')
     await user.click(screen.getByRole('button', { name: 'Отправить запрос' }))
@@ -137,7 +160,7 @@ describe('PlaygroundPage', () => {
     const user = userEvent.setup()
 
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
-    render(<PlaygroundPage />)
+    renderPlayground()
 
     await user.type(screen.getByLabelText('Клиентский ключ'), 'lgw_test')
     await user.click(screen.getByRole('button', { name: 'Отправить запрос' }))

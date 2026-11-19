@@ -4,11 +4,13 @@ import type { FormEvent } from 'react'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Grid from '@mui/material/Grid'
+import Link from '@mui/material/Link'
 import MenuItem from '@mui/material/MenuItem'
 import Paper from '@mui/material/Paper'
 import Stack from '@mui/material/Stack'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
+import { Link as RouterLink } from 'react-router-dom'
 
 import { Button, Card, PageHeader, StatusBadge } from '@llm-gateway/ui'
 
@@ -112,6 +114,7 @@ export function PlaygroundPage() {
   )
   const [answer, setAnswer] = useState<string | null>(null)
   const [provider, setProvider] = useState<string | null>(null)
+  const [requestId, setRequestId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
@@ -128,6 +131,7 @@ export function PlaygroundPage() {
     setError(null)
     setAnswer(null)
     setProvider(null)
+    setRequestId(null)
 
     try {
       const response = await fetch('/v1/chat/completions', {
@@ -151,6 +155,8 @@ export function PlaygroundPage() {
 
         return
       }
+
+      setRequestId(response.headers?.get('X-Request-Id') ?? null)
 
       if (body.raw.trim() === '') {
         setError(`Шлюз вернул пустой ответ (HTTP ${response.status}). ${BACKEND_HINT}`)
@@ -242,6 +248,20 @@ export function PlaygroundPage() {
           >
             <Stack gap={2}>
               {error !== null ? <Alert severity="error">{error}</Alert> : null}
+
+              {requestId !== null ? (
+                <Alert severity="success">
+                  Запрос сохранён в журнале:{' '}
+                  <Link
+                    component={RouterLink}
+                    sx={{ fontFamily: 'monospace' }}
+                    to={`/requests/${requestId}`}
+                    underline="hover"
+                  >
+                    {requestId}
+                  </Link>
+                </Alert>
+              ) : null}
 
               {answer !== null ? (
                 <Paper sx={{ bgcolor: 'action.hover', p: 2, whiteSpace: 'pre-wrap' }} variant="outlined">
